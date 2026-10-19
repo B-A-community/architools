@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>ArchiTools</title>
+<!-- Дизайн-код плагинов B&A: ba.css / ba.js лежат рядом, правила — design/designcode.md в ralncs -->
+<link rel="stylesheet" href="ba.css">
+<script src="ba.js"></script>
+<script src="i18n.js"></script>
+<style>
+  #wrap { padding: 4px 14px 14px; }
+  #status { min-height: 30px; }
+  .cats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 6px; }
+  .cats button { display: flex; align-items: center; gap: 6px; padding: 5px 8px; font-size: 12px; text-align: left; }
+  .cats button img { width: 18px; height: 18px; flex: 0 0 18px; }
+  .cats button.on img { filter: brightness(0) invert(1); }
+  .cats button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 8px; }
+  .tools button { padding: 5px 8px; text-align: left; font-size: 12px; }
+  .tools button.sel { outline: 2px solid #2b6cb0; outline-offset: -1px; background: #fff; font-weight: 600; }
+  .group { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px 12px 10px; margin-top: 8px; }
+  .group h3 { margin: 0 0 6px; }
+  .tool-name { font-size: 15px; font-weight: 700; }
+  .hint { color: #555; font-size: 12px; line-height: 1.4; margin-top: 2px; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .row label.name { flex: 0 0 140px; color: #555; }
+  .row select, .row input[type="text"] { flex: 1; min-width: 0; padding: 4px 8px; }
+  .row label.opt { padding: 2px 0; }
+  .empty { color: #888; font-size: 12px; }
+  /* Действие всегда под рукой: закреплено над футером, контент скроллится. */
+  #bar { padding: 8px 14px 8px; background: #fff; border-top: 1px solid #ddd; }
+  .actions { display: flex; gap: 8px; align-items: center; }
+  .actions .primary { flex: 1; padding: 8px 12px; }
+  #msg { margin-top: 6px; min-height: 17px; font-size: 12px; line-height: 1.4; color: #888; }
+  .row.hidden { display: none; }
+  #msg.ok { color: #2f855a; }
+  #msg.bad { color: #c53030; }
+  header .about { padding: 2px 9px; border-radius: 10px; font-size: 12px; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="code">ArchiTools</span>
+    <span class="spacer"></span>
+    <button class="about" id="btnAbout" data-t-title="t_about">?</button>
+  </header>
+  <div id="status">…</div>
+
+  <div id="wrap">
+    <div class="cats" id="cats"></div>
+    <div class="tools" id="tools"></div>
+
+    <div class="group">
+      <div class="tool-name" id="toolName"></div>
+      <div class="hint" id="toolHint"></div>
+    </div>
+
+    <div class="group">
+      <h3 data-t="g_params"></h3>
+      <div id="params"></div>
+    </div>
+
+  </div>
+
+  <div id="bar">
+    <div class="actions">
+      <button class="primary" id="btnApply" data-t="btn_apply" data-t-title="t_apply"></button>
+      <button id="btnReset" data-t="btn_reset" data-t-title="t_reset"></button>
+    </div>
+    <div id="msg"></div>
+  </div>
+
+  <footer data-t="footer"></footer>
+  <div id="toast"></div>
+
+  <script>
+  (function () {
+    applyI18n();
+    var catalog = [], byId = {}, state = { current: null, category: null, values: {} };
+
+    function call(name) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      if (window.sketchup && sketchup[name]) sketchup[name].apply(sketchup, args);
+    }
+
+    function renderCats() {
+      var box = document.getElementById('cats');
+      box.innerHTML = '';
+      catalog.forEach(function (cat) {
+        var b = document.createElement('button');
+        b.className = 'tab' + (cat.id === state.category ? ' on' : '');
+        b.title = cat.label;
+        b.innerHTML = '<img src="' + BA.esc(cat.icon) + '" alt=""><span>' + BA.esc(cat.label) + '</span>';
+        b.addEventListener('click', function () {
+          if (cat.tools.length) call('pick', cat.tools[0].id);
+        });
+        box.appendChild(b);
+      });
+    }
+
+    function renderTools() {
+      var box = document.getElementById('tools');
+      box.innerHTML = '';
+      var cat = catalog.filter(function (c) { return c.id === state.category; })[0];
+      if (!cat) return;
+      cat.tools.forEach(function (tool) {
+        var b = document.createElement('button');
+        b.textContent = tool.label;
+        b.title = tool.hint;
+        if (tool.id === state.current) b.className = 'sel';
+        b.addEventListener('click', function () { call('pick', tool.id); });
+        box.appendChild(b);
+      });
+    }
+
+    // Поле видно, только если параметры из show имеют нужные значения.
+    function applyVisibility() {
+      var tool = byId[state.current];
+      if (!tool) return;
+      tool.params.forEach(function (p) {
+        var row = document.getElementById('row_' + p.key);
+        if (!row || !p.show) return;
+        var visible = Object.keys(p.show).every(function (k) {
+          return p.show[k].indexOf(String(state.values[k])) >= 0;
+        });
+        row.classList.toggle('hidden', !visible);
+      });
+    }
+
+    function field(param, value) {
+      var row = document.createElement('div');
+      row.className = 'row';
+      row.id = 'row_' + param.key;
+      var id = 'f_' + param.key;
+      if (param.type === 'bool') {
+        row.innerHTML = '<label class="opt"><input type="checkbox" id="' + id + '"> <span>' +
+                        BA.esc(param.label) + '</span></label>';
+        var cb = row.querySelector('input');
+        cb.checked = value === true || value === 'true';
+        cb.addEventListener('change', function () {
+          state.values[param.key] = cb.checked;
+          applyVisibility();
+          call('set', state.current, param.key, String(cb.checked));
+        });
+        return row;
+      }
+      row.innerHTML = '<label class="name" for="' + id + '">' + BA.esc(param.label) + '</label>';
+      var input;
+      if (param.type === 'choice') {
+        input = document.createElement('select');
+        param.choices.forEach(function (c) {
+          var o = document.createElement('option');
+          o.value = c[0]; o.textContent = c[1];
+          input.appendChild(o);
+        });
+        input.value = value;
+      } else {
+        input = document.createElement('input');
+        input.type = 'text';
+        input.value = value;
+        if (param.type === 'angle') input.title = '°';
+        input.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') { input.blur(); apply(); }
+        });
+      }
+      input.id = id;
+      input.dataset.key = param.key;
+      input.addEventListener('change', function () {
+        state.values[param.key] = input.value;
+        applyVisibility();
+        call('set', state.current, param.key, input.value);
+      });
+      row.appendChild(input);
+      if (param.type === 'angle') {
+        var u = document.createElement('span');
+        u.className = 'unit muted';
+        u.textContent = '°';
+        row.appendChild(u);
+      }
+      return row;
+    }
+
+    function renderTool() {
+      var tool = byId[state.current];
+      if (!tool) return;
+      document.getElementById('toolName').textContent = tool.label;
+      document.getElementById('toolHint').textContent = tool.hint;
+      var box = document.getElementById('params');
+      var focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.key : null;
+      box.innerHTML = '';
+      if (!tool.params.length) {
+        box.innerHTML = '<div class="empty">' + BA.esc(t('no_params')) + '</div>';
+      }
+      tool.params.forEach(function (p) { box.appendChild(field(p, state.values[p.key])); });
+      applyVisibility();
+      if (focused) {
+        var again = box.querySelector('[data-key="' + focused + '"]');
+        if (again) again.focus();
+      }
+    }
+
+    function apply() {
+      var msg = document.getElementById('msg');
+      msg.className = ''; msg.textContent = '…';
+      call('apply', state.current);
+    }
+
+    window.at = {
+      init: function (data) {
+        catalog = data.catalog;
+        byId = {};
+        catalog.forEach(function (c) { c.tools.forEach(function (tl) { byId[tl.id] = tl; }); });
+      },
+      update: function (data) {
+        var toolChanged = data.current !== state.current;
+        state.current = data.current;
+        state.category = data.category;
+        state.values = data.values;
+        document.getElementById('status').textContent = data.selection;
+        renderCats();
+        renderTools();
+        renderTool();
+        if (toolChanged) document.getElementById('msg').textContent = '';
+      },
+      selection: function (text) {
+        document.getElementById('status').textContent = text;
+      },
+      result: function (res) {
+        var msg = document.getElementById('msg');
+        msg.className = res.ok ? 'ok' : 'bad';
+        msg.textContent = res.message;
+      }
+    };
+
+    document.getElementById('btnApply').addEventListener('click', apply);
+    document.getElementById('btnReset').addEventListener('click', function () { call('reset', state.current); });
+    document.getElementById('btnAbout').addEventListener('click', function () { call('about'); });
+    call('ready');
+  })();
+  </script>
+</body>
+</html>

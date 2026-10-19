@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ArchiTools</title>
+<link rel="stylesheet" href="ba.css">
+<script src="i18n.js"></script>
+<style>
+  body { height: auto; }
+  #wrap { padding: 18px 20px 14px; }
+  .name { font-size: 18px; font-weight: 700; }
+  .sub { color: #555; margin-top: 2px; }
+  dl { margin-top: 14px; display: grid; grid-template-columns: 110px 1fr; row-gap: 6px; }
+  dt { color: #888; }
+  dd { margin: 0; }
+  a { color: #2b6cb0; cursor: pointer; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  footer { display: flex; align-items: center; gap: 10px; }
+  footer .lic { flex: 1; }
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <div class="name">ArchiTools</div>
+    <div class="sub" data-t="about_sub"></div>
+    <dl>
+      <dt data-t="about_version"></dt><dd id="version">—</dd>
+      <dt data-t="about_authors"></dt>
+      <dd><a data-url="https://github.com/maksarsanjeev">maksarsanjeev</a></dd>
+      <dt data-t="about_repo"></dt>
+      <dd><a data-url="https://github.com/B-A-community/architools">B-A-community/architools</a></dd>
+    </dl>
+  </div>
+  <footer>
+    <span class="lic" data-t="about_license"></span>
+    <button id="btnClose" data-t="about_close"></button>
+  </footer>
+  <script>
+  (function () {
+    applyI18n();
+    // Ссылки открываются только через Ruby, и только свои.
+    document.querySelectorAll('a[data-url]').forEach(function (a) {
+      a.addEventListener('click', function () {
+        if (window.sketchup && sketchup.open_url) sketchup.open_url(a.dataset.url);
+      });
+    });
+    document.getElementById('btnClose').addEventListener('click', function () {
+      if (window.sketchup && sketchup.close) sketchup.close();
+    });
+    window.init = function (data) { document.getElementById('version').textContent = data.version; };
+    if (window.sketchup && sketchup.ready) sketchup.ready();
+  })();
+  </script>
+</body>
+</html>
