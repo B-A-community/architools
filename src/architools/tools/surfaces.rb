@@ -61,6 +61,39 @@ module BACommunity
         end
       end
 
+      # «Бусы» (Copy Comps Path в JHS): следующая копия — на расстоянии s
+      # по прямой от предыдущей (пересечение пути со сферой). Возвращает
+      # расстояния вдоль пути.
+      def chord_stations(points, s)
+        out = [0.0]
+        cur = points.first
+        acc = 0.0
+        points.each_cons(2) do |a, b|
+          seg = a.distance(b).to_f
+          start = acc
+          loop do
+            # Точка на отрезке a→b на расстоянии s от cur, дальше по ходу.
+            d = b - a
+            f = a - cur # |a + t·d − cur| = s
+            qa = d.dot(d)
+            qb = 2 * f.dot(d)
+            qc = f.dot(f) - s * s
+            disc = qb * qb - 4 * qa * qc
+            break if disc.negative?
+
+            t = (-qb + Math.sqrt(disc)) / (2 * qa)
+            lo = cur.distance(a).to_f < 1.0e-9 ? 1.0e-9 : ((out.last - start) / seg)
+            break if t > 1.0 + 1.0e-12 || t <= lo
+
+            cur = Geom.linear_combination(1.0 - t, a, t, b)
+            out << start + t * seg
+            raise UserError, ArchiTools.t(:err_too_many) if out.size > MAX_ITEMS
+          end
+          acc += seg
+        end
+        out
+      end
+
       def heading(vec)
         Math.atan2(vec.y, vec.x)
       end
@@ -224,6 +257,7 @@ module BACommunity
       p.length :dx, 1000
       p.length :dy, 1000
       p.length :dz, 3000, show: { levels: '!1' }
+      p.choice :pattern, :grid, %i[grid staggered]
     end.run do |ctx|
       objects = ctx.objects
       ctx.need(!objects.empty?, :need_objects)
@@ -238,7 +272,9 @@ module BACommunity
             c.times do |i|
               next if i.zero? && j.zero? && k.zero?
 
-              v = Geom::Vector3d.new(i * ctx.p[:dx], j * ctx.p[:dy], k * ctx.p[:dz])
+              # Шахматный (треугольная сетка): нечётные ряды сдвинуты на полшага.
+              shift = ctx.p[:pattern] == :staggered && j.odd? ? ctx.p[:dx] / 2.0 : 0.0
+              v = Geom::Vector3d.new(i * ctx.p[:dx] + shift, j * ctx.p[:dy], k * ctx.p[:dz])
               ctx.made(ModifyTools.copy_object(ctx.entities, obj, Geom::Transformation.translation(v)))
               made += 1
             end
@@ -249,9 +285,9 @@ module BACommunity
     end
 
     Registry.define(:path_array, :modify) do |p|
-      p.choice :mode, :count, %i[count spacing max_spacing]
+      p.choice :mode, :count, %i[count spacing max_spacing chord]
       p.int :count, 10, min: 2, show: { mode: :count }
-      p.length :spacing, 1000, show: { mode: %i[spacing max_spacing] }
+      p.length :spacing, 1000, show: { mode: %i[spacing max_spacing chord] }
       p.bool :follow, true
     end.run do |ctx|
       objects = ctx.objects
@@ -280,6 +316,9 @@ module BACommunity
         when :spacing
           ctx.need(s > Geom3::MIN_SIZE, :err_spacing)
           (0..(len / s + 1.0e-9).floor).map { |i| i * s }
+        when :chord
+          ctx.need(s > Geom3::MIN_SIZE, :err_spacing)
+          SurfaceTools.chord_stations(pts, s)
         else
           ctx.need(s > Geom3::MIN_SIZE, :err_spacing)
           n = [(len / s - 1.0e-9).ceil, 1].max

@@ -82,6 +82,8 @@ module BACommunity
       def bar(entities, p0, p1, up, loops, name = nil)
         t = (p1 - p0).normalize
         up = up - G.scale(t, up.dot(t))
+        # Брус вдоль «вверх» (вертикальная труба): берём любую поперечную ось.
+        up = (t.parallel?(G::X) ? Geom::Vector3d.new(0, 1, 0) : G::X) - G.scale(t, (t.parallel?(G::X) ? Geom::Vector3d.new(0, 1, 0) : G::X).dot(t)) if up.length.to_f < 1.0e-6
         up = up.normalize
         side = t.cross(up).normalize
         loops = loops.each_with_index.map do |l, i|

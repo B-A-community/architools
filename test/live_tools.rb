@@ -10,7 +10,11 @@ module ATLive
   extend self
 
   def model = Sketchup.active_model
-  def ents = model.active_entities
+  # Каждое обращение к контексту — с проверкой, что он всё ещё песочница.
+  def ents
+    guard! if @sandbox
+    model.active_entities
+  end
   def pt(x, y, z = 0) = Geom::Point3d.new(x.mm, y.mm, z.mm)
   def mm(v) = (v.to_f * 25.4)
   def mm3(v) = (v.to_f * 25.4**3)
@@ -38,8 +42,23 @@ module ATLive
 
   def near(a, b, tol = 0.5) = (a - b).abs <= tol
 
+  # Чистим ТОЛЬКО песочницу — по её собственным entities, а не по
+  # «активному контексту»: если SketchUp выйдет из песочницы (клик мимо
+  # группы), active_entities станут корнем модели, и чистка по ним стёрла
+  # бы чужую модель. Так однажды и случилось — больше никогда.
   def wipe
-    ents.erase_entities(ents.to_a - [@anchor])
+    guard!
+    box = @sandbox.entities
+    box.erase_entities(box.to_a - [@anchor])
+  end
+
+  # Проверка перед каждым шагом: мы всё ещё внутри песочницы. Если нет —
+  # прогон останавливается целиком, ничего вне песочницы не трогаем.
+  class Interrupted < StandardError; end
+
+  def guard!
+    ok = @sandbox&.valid? && model.active_path.to_a.first == @sandbox && model.active_entities.parent == @sandbox.definition
+    raise Interrupted, 'SketchUp вышел из песочницы (клик или работа в модели во время теста) — прогон остановлен, модель не тронута' unless ok
   end
 
   # ARCHITOOLS_ONLY=regexp — гонять только подходящие проверки (отладка).
@@ -48,7 +67,10 @@ module ATLive
 
     wipe
     ok, info = yield
+    guard!
     @results << [ok ? 'PASS' : 'FAIL', name, info]
+  rescue Interrupted
+    raise
   rescue StandardError => e
     @results << ['ERR', name, "#{e.class}: #{e.message} @ #{e.backtrace.first}"]
   end
@@ -67,7 +89,11 @@ module ATLive
     @sandbox.name = 'ArchiTools live test'
     @anchor = @sandbox.entities.add_cline(Geom::Point3d.new(0, 0, -100_000.mm), Geom::Vector3d.new(1, 0, 0))
     model.active_path = [@sandbox]
+    guard!
     run_all
+  rescue Interrupted => e
+    @results << ['ERR', 'ПРОГОН ОСТАНОВЛЕН', e.message]
+    @results
   ensure
     model.active_path = nil
     @sandbox.erase! if @sandbox&.valid?
@@ -1136,6 +1162,351 @@ module ATLive
       flat = edges.count { |e| e.start.position.z.to_f.abs < 1e-6 && e.end.position.z.to_f.abs < 1e-6 }
       top = edges.flat_map(&:vertices).map { |v| mm(v.position.z).round }.max
       [r[:ok] && edges.size == 4 && flat == 2 && top == 600, "edges=#{edges.size} flat=#{flat} top=#{top}"]
+    end
+
+
+    # --- 0.3.1: JHS Powerbar ---
+    box_group = lambda do |x, y, w = 1000, d = 1000, h = 1000|
+      g = ents.add_group
+      f = g.entities.add_face(pt(x, y), pt(x + w, y), pt(x + w, y + d), pt(x, y + d))
+      f.reverse! if f.normal.z.negative?
+      f.pushpull(h.mm)
+      g
+    end
+
+    check('jhs soften: angle, all, none, quadrants') do
+      g = ents.add_group
+      cyl = g.entities.add_circle(pt(0, 0), Geom::Vector3d.new(0, 0, 1), 500.mm, 16)
+      f = g.entities.add_face(cyl)
+      f.reverse! if f.normal.z.negative?
+      f.pushpull(1000.mm)
+      sel(g)
+      r1 = run(:soften_edges, mode: :angle, angle: 30.0, soft: true, smooth: true, nested: true)
+      soft = g.entities.grep(Sketchup::Edge).count(&:soft?)
+      sel(g)
+      run(:soften_edges, mode: :none, nested: true)
+      none = g.entities.grep(Sketchup::Edge).count(&:soft?)
+      sel(g)
+      run(:soften_edges, mode: :all, nested: true)
+      all = g.entities.grep(Sketchup::Edge).count(&:soft?)
+      wipe
+      q = ents.add_group
+      mesh = Geom::PolygonMesh.new
+      mesh.add_polygon(pt(0, 0), pt(1000, 0), pt(1000, 1000))
+      mesh.add_polygon(pt(0, 0), pt(1000, 1000), pt(0, 1000))
+      mesh.add_polygon(pt(1000, 0), pt(2000, 0, 300), pt(2000, 1000, 300))
+      mesh.add_polygon(pt(1000, 0), pt(2000, 1000, 300), pt(1000, 1000))
+      q.entities.fill_from_mesh(mesh, true, 0)
+      sel(q)
+      r4 = run(:soften_edges, mode: :quadrants, nested: true)
+      qs = q.entities.grep(Sketchup::Edge).count(&:soft?)
+      [r1[:ok] && soft == 16 && none.zero? && all == 48 && r4[:ok] && qs == 2, "angle=#{soft} none=#{none} all=#{all} quads=#{qs}"]
+    end
+
+    check('jhs weld, explode, equal segments') do
+      e = [ents.add_line(pt(0, 0), pt(1000, 0)), ents.add_line(pt(1000, 0), pt(1000, 3000))]
+      sel(e)
+      r1 = run(:weld_edges)
+      welded = ents.grep(Sketchup::Edge).map(&:curve).compact.uniq.size
+      sel(ents.grep(Sketchup::Edge))
+      r2 = run(:explode_curves, nested: false)
+      loose = ents.grep(Sketchup::Edge).map(&:curve).compact.size
+      sel(ents.grep(Sketchup::Edge))
+      r3 = run(:equalize_curve, by: :count, count: 8)
+      lens = ents.grep(Sketchup::Edge).map { |x| mm(x.length).round }.uniq
+      [r1[:ok] && r2[:ok] && r3[:ok] && welded == 1 && loose.zero? && lens == [500], "welded=#{welded} lens=#{lens}"]
+    end
+
+    check('jhs face finder in group and loose') do
+      g = ents.add_group
+      [[0, 0], [1000, 0], [1000, 1000], [0, 1000], [0, 0]].each_cons(2) { |(a, b), (c, d)| g.entities.add_line(pt(a, b), pt(c, d)) }
+      ents.add_curve(pt(2000, 0), pt(3000, 0), pt(3000, 1000), pt(2000, 0))
+      sel(g, ents.grep(Sketchup::Edge))
+      r = run(:face_finder, nested: true)
+      [r[:ok] && g.entities.grep(Sketchup::Face).size == 1 && ents.grep(Sketchup::Face).size == 1, r[:message]]
+    end
+
+    check('jhs extrude lines and lines to tubes') do
+      ents.add_curve(pt(0, 0), pt(2000, 0), pt(2000, 1000))
+      sel(ents.grep(Sketchup::Edge))
+      r1 = run(:extrude_lines, dx: 0.0, dy: 0.0, dz: 2500.mm.to_f, group: false)
+      area = ents.grep(Sketchup::Face).sum(&:area) * 645.16
+      wipe
+      ents.add_curve(pt(0, 0), pt(2000, 0), pt(2000, 1000), pt(2000, 1000, 1500))
+      sel(ents.grep(Sketchup::Edge))
+      r2 = run(:lines_to_tubes, diameter: 60.mm.to_f, segments: 12, joints: true, erase_lines: true)
+      g = groups.first
+      parts = g.entities.grep(Sketchup::Group)
+      [r1[:ok] && (area - 3000 * 2500).abs < 1 && r2[:ok] && parts.size == 5 && parts.all?(&:manifold?) && ents.grep(Sketchup::Edge).empty?,
+       "area=#{area.round} parts=#{parts.size}"]
+    end
+
+    check('jhs drop below and to level') do
+      floor = ents.add_face(pt(-2000, -2000, 500), pt(4000, -2000, 500), pt(4000, 4000, 1500), pt(-2000, 4000, 1500))
+      a = box_group.call(0, 0, 400, 400, 400)
+      a.transform!(Geom::Transformation.translation(Geom::Vector3d.new(0, 0, 5000.mm)))
+      b = box_group.call(2000, 2000, 400, 400, 400)
+      b.transform!(Geom::Transformation.translation(Geom::Vector3d.new(0, 0, 5000.mm)))
+      sel(a, b)
+      r1 = run(:drop, mode: :below)
+      za = mm(a.bounds.min.z).round
+      zb = mm(b.bounds.min.z).round
+      sel(a)
+      r2 = run(:drop, mode: :level, level: -300.mm.to_f)
+      # Плоскость z = 500 + (y + 2000)·1000/6000: под центром (200, 200) → 866.7, под (2200, 2200) → 1200.
+      [r1[:ok] && (za - 867).abs <= 1 && (zb - 1200).abs <= 1 && r2[:ok] && mm(a.bounds.min.z).round == -300 && floor.valid?,
+       "a=#{za} b=#{zb}"]
+    end
+
+    check('jhs c-points at vertices, connect, component to points') do
+      f = rect(0, 0, 2000, 1000)
+      sel(f)
+      r1 = run(:cpoints_at_vertices)
+      cps = ents.grep(Sketchup::ConstructionPoint)
+      ents.erase_entities(ents.grep(Sketchup::Face) + ents.grep(Sketchup::Edge)) # линия не должна лечь на рёбра грани
+      sel(cps)
+      r2 = run(:connect_cpoints, closed: true, output: :edge)
+      line = ents.grep(Sketchup::Edge).count { |x| x.curve }
+      g = box_group.call(5000, 0, 200, 200, 300)
+      sel(g, cps)
+      r3 = run(:comps_to_cpoints, anchor: :bottom)
+      bases = groups.reject { |x| x == g }.map { |x| [mm(x.bounds.center.x).round, mm(x.bounds.center.y).round, mm(x.bounds.min.z).round] }.sort
+      [r1[:ok] && cps.size == 4 && r2[:ok] && line == 4 && r3[:ok] &&
+        bases == [[0, 0, 0], [0, 1000, 0], [2000, 0, 0], [2000, 1000, 0]], "cps=#{cps.size} line=#{line} #{bases}"]
+    end
+
+    check('jhs mirror: 2-point plan plane, 3-point plane, copy, loose geometry') do
+      g = box_group.call(1000, 0, 500, 300, 200)
+      sel(g)
+      r1 = run(:mirror, copy: true, points: [pt(0, -1000), pt(0, 1000)])
+      xs = groups.map { |x| [mm(x.bounds.min.x).round, mm(x.bounds.max.x).round] }.sort
+      sel(g)
+      r2 = run(:mirror, copy: false, points: [pt(0, 0, 1000), pt(1000, 0, 1000), pt(0, 1000, 1000)])
+      z = [mm(g.bounds.min.z).round, mm(g.bounds.max.z).round]
+      wipe
+      e = ents.add_line(pt(100, 0), pt(500, 0))
+      sel(e)
+      r3 = run(:mirror, copy: true, points: [pt(0, -10), pt(0, 10)])
+      ex = ents.grep(Sketchup::Edge).flat_map { |x| x.vertices.map { |v| mm(v.position.x).round } }.sort
+      [r1[:ok] && xs == [[-1500, -1000], [1000, 1500]] && r2[:ok] && z == [1800, 2000] && r3[:ok] && ex == [-500, -100, 100, 500],
+       "xs=#{xs} z=#{z} edges=#{ex}"]
+    end
+
+    check('jhs rotate about axis and move by vector') do
+      g = box_group.call(1000, 0, 500, 500, 500)
+      sel(g)
+      r1 = run(:rotate_3d, angle: 90.0, copy: false, points: [pt(0, 0, 0), pt(0, 0, 1000)])
+      c = [mm(g.bounds.center.x).round, mm(g.bounds.center.y).round]
+      sel(g)
+      r2 = run(:move_by, dx: 0.0, dy: 0.0, dz: 700.mm.to_f, copy: true)
+      [r1[:ok] && c == [-250, 1250] && r2[:ok] && groups.size == 2 && groups.map { |x| mm(x.bounds.min.z).round }.sort == [0, 700],
+       "c=#{c}"]
+    end
+
+    check('jhs random scale and rotate is reproducible') do
+      gs = (0...6).map { |i| box_group.call(i * 1500, 0, 500, 200, 300) }
+      sel(gs)
+      r = run(:random_transform, mode: :both, scale_min: 50.0, scale_max: 150.0, angle_max: 180.0, seed: 7)
+      a = gs.map { |x| x.transformation.to_a.map { |v| v.round(6) } }
+      wipe
+      gs = (0...6).map { |i| box_group.call(i * 1500, 0, 500, 200, 300) }
+      sel(gs)
+      run(:random_transform, mode: :both, scale_min: 50.0, scale_max: 150.0, angle_max: 180.0, seed: 7)
+      b = gs.map { |x| x.transformation.to_a.map { |v| v.round(6) } }
+      heights = gs.map { |x| mm(x.bounds.depth).round }
+      [r[:ok] && a == b && heights.uniq.size > 3 && heights.all? { |h| h.between?(150, 450) } &&
+        gs.all? { |x| mm(x.bounds.min.z).abs < 0.5 }, "heights=#{heights}"]
+    end
+
+    check('jhs rotix: arrow keys rotate, axis change, flip') do
+      g = box_group.call(0, 0, 1000, 200, 100)
+      sel(g)
+      r = run(:rotix, step: 90.0)
+      tool = AT.instance_variable_get(:@last_rotix)
+      view = model.active_view
+      tool.onKeyDown(VK_RIGHT, 0, 0, view)
+      w1 = [mm(g.bounds.width).round, mm(g.bounds.height).round]
+      tool.onKeyDown(VK_UP, 0, 0, view)
+      tool.onKeyDown(VK_DOWN, 0, 0, view)
+      tool.onKeyDown(VK_LEFT, 0, CONSTRAIN_MODIFIER_MASK, view)
+      [r[:ok] && w1 == [200, 1000] && tool.axis_index == 1, "after right=#{w1} axis=#{tool.axis_index}"]
+    end
+
+    check('jhs proxify toggle and restore all') do
+      d = model.definitions.add('ATLive heavy')
+      d.entities.add_face(pt(0, 0), pt(300, 0), pt(300, 300), pt(0, 300)).pushpull(-300.mm)
+      i1 = ents.add_instance(d, Geom::Transformation.new)
+      i2 = ents.add_instance(d, Geom::Transformation.translation(Geom::Vector3d.new(1000.mm, 0, 0)))
+      sel(i1)
+      r1 = run(:proxify, mode: :toggle)
+      p1 = i1.definition.name
+      sel(i2)
+      r2 = run(:proxify, mode: :all_instances)
+      both = [i1.definition.name, i2.definition.name]
+      r3 = run(:proxify, mode: :restore_all)
+      back = [i1.definition.name, i2.definition.name]
+      bbox_ok = i2.bounds.diagonal.to_f > 0
+      [r1[:ok] && p1.start_with?('Proxy') && both.all? { |n| n.start_with?('Proxy') } && r3[:ok] && back == [d.name] * 2 && bbox_ok,
+       "proxy=#{p1} both=#{both} back=#{back}"]
+    end
+
+    check('jhs composwapper: one sample replaces many') do
+      a = model.definitions.add('ATLive chair A')
+      a.entities.add_line(pt(0, 0), pt(100, 0))
+      b = model.definitions.add('ATLive chair B')
+      b.entities.add_line(pt(0, 0), pt(0, 100))
+      ia = (0...3).map { |i| ents.add_instance(a, Geom::Transformation.translation(Geom::Vector3d.new((i * 500).mm, 0, 0))) }
+      ib = ents.add_instance(b, Geom::Transformation.translation(Geom::Vector3d.new(0, 1000.mm, 0)))
+      sel(ia, ib)
+      r = run(:composwapper, all_instances: false)
+      extra = ents.add_instance(a, Geom::Transformation.translation(Geom::Vector3d.new(0, 2000.mm, 0)))
+      sel(extra, ib)
+      r2 = run(:composwapper, all_instances: false)
+      [r[:ok] && ia.all? { |x| x.definition == b } && !r2[:ok] && r2[:message] == AT.t(:err_swap_ambiguous), r[:message]]
+    end
+
+    check('jhs mesh maker: cells, rotated guides, divisions') do
+      f = rect(0, 0, 2000, 1000)
+      sel(f)
+      r1 = run(:mesh_maker, by: :cell, cell: 250.mm.to_f, angle: 0.0, output: :split)
+      faces = ents.grep(Sketchup::Face).size
+      wipe
+      f = rect(0, 0, 2000, 1000)
+      sel(f)
+      r2 = run(:mesh_maker, by: :cell, cell: 300.mm.to_f, angle: 30.0, output: :guides)
+      guides = ents.grep(Sketchup::ConstructionLine).size - 1
+      wipe
+      f = rect(0, 0, 2000, 1000)
+      sel(f)
+      r3 = run(:mesh_maker, by: :divisions, cols: 5, rows: 3, output: :split)
+      [r1[:ok] && faces == 32 && r2[:ok] && guides > 8 && r3[:ok] && ents.grep(Sketchup::Face).size == 15,
+       "cells=#{faces} guides=#{guides} div=#{ents.grep(Sketchup::Face).size}"]
+    end
+
+    check('jhs split up: 4×4 and 3×3') do
+      f = rect(0, 0, 1000, 1000)
+      sel(f)
+      r1 = run(:split_up, divisions: 4)
+      n1 = ents.grep(Sketchup::Face).size
+      wipe
+      f = rect(0, 0, 1000, 1000)
+      sel(f)
+      r2 = run(:split_up, divisions: 3)
+      n2 = ents.grep(Sketchup::Face).size
+      wipe
+      # Все шесть граней коробки разом: у соседних общие рёбра.
+      f = rect(0, 0, 1000, 1000)
+      f.reverse! if f.normal.z.negative?
+      f.pushpull(1000.mm)
+      sel(ents.grep(Sketchup::Face))
+      r3 = run(:split_up, divisions: 4)
+      g = ents.add_group(ents.grep(Sketchup::Face) + ents.grep(Sketchup::Edge))
+      [r1[:ok] && n1 == 16 && r2[:ok] && n2 == 9 && r3[:ok] && g.entities.grep(Sketchup::Face).size == 96 && g.manifold?,
+       "n=#{n1} box=#{g.entities.grep(Sketchup::Face).size} manifold=#{g.manifold?}"]
+    end
+
+    check('jhs FFD: lattice moves the shape, lock keeps edges, finish bakes') do
+      g = box_group.call(0, 0, 1000, 1000, 1000)
+      sel(g)
+      r1 = run(:ffd, mode: :create, lattice: :g3)
+      lat = groups.find { |x| x.name == AT.t(:name_ffd_lattice) }
+      st = AT::FFD.find_state(lat)
+      corner = st[:ctrl][[2, 2, 2]]
+      lat.entities.transform_entities(Geom::Transformation.translation(Geom::Vector3d.new(500.mm, 0, 0)), corner)
+      n = AT::FFD.update(lat)
+      top = g.entities.grep(Sketchup::Edge).flat_map(&:vertices).uniq.map { |v| v.position.to_a.map { |c| mm(c).round } }
+      moved = top.include?([1500, 1000, 1000]) && top.include?([0, 0, 0]) && top.include?([1000, 0, 0])
+      # Фиксация: рёбра нижней грани не двигаются при сдвиге нижнего угла.
+      bottom = g.entities.grep(Sketchup::Face).find { |f| f.normal.z.negative? }
+      bottom.edges.each { |e| e.set_attribute(AT::FFD::DICT, 'locked', true) }
+      lat.entities.transform_entities(Geom::Transformation.translation(Geom::Vector3d.new(0, 0, -400.mm)), st[:ctrl][[0, 0, 0]])
+      AT::FFD.update(lat)
+      low = g.entities.grep(Sketchup::Edge).flat_map(&:vertices).uniq.map { |v| mm(v.position.z).round }.min
+      sel(lat)
+      r3 = run(:ffd, mode: :finish)
+      [r1[:ok] && n.positive? && moved && low == 0 && r3[:ok] && !lat.valid? && g.valid?, "moved=#{moved} low=#{low} n=#{n}"]
+    end
+
+    check('jhs ffd lock/unlock refusal and 4x4x4') do
+      g = box_group.call(0, 0, 1000, 500, 300)
+      sel(g)
+      r = run(:ffd, mode: :create, lattice: :g4)
+      lat = groups.find { |x| x.name == AT.t(:name_ffd_lattice) }
+      model.selection.clear
+      r2 = run(:ffd, mode: :lock)
+      [r[:ok] && lat.entities.grep(Sketchup::ConstructionPoint).size == 64 && !r2[:ok], r2[:message]]
+    end
+
+    check('jhs upright extruder: vector and by edge') do
+      ents.add_curve(pt(0, 0), pt(3000, 0), pt(3000, 3000))
+      prof = ents.add_face(pt(0, -50, 0), pt(0, 50, 0), pt(0, 50, 300), pt(0, -50, 300))
+      sel(ents.grep(Sketchup::Edge).reject { |e| prof.edges.include?(e) }, prof)
+      r1 = run(:extrude_path, upright: :vector, up_x: 0.0, up_y: 0.0, up_z: 1.0, smooth: true, erase_profile: false)
+      g1 = groups.first
+      wipe
+      ents.add_curve(pt(0, 0), pt(3000, 0), pt(3000, 3000))
+      up = ents.add_line(pt(-1000, -1000, 0), pt(-1000, -1000, 500))
+      prof = ents.add_face(pt(0, -50, 0), pt(0, 50, 0), pt(0, 50, 300), pt(0, -50, 300))
+      sel(ents.grep(Sketchup::Edge).reject { |e| prof.edges.include?(e) }, prof)
+      r2 = run(:extrude_path, upright: :edge, smooth: true, erase_profile: false)
+      g2 = groups.first
+      [r1[:ok] && r2[:ok] && g1 && g2 && near(mm(g2.bounds.max.z), 300, 0.5) && g2.manifold? && up.valid?,
+       "#{r1[:message]} / #{r2[:message]}"]
+    end
+
+    check('jhs offset as guides, chord string, bounds align, staggered grid') do
+      ents.add_line(pt(0, 0), pt(1000, 0)).tap { |x| sel(x) }
+      r1 = run(:offset_edges, distance: 100.mm.to_f, both_sides: true, flip: false, output: :guides)
+      guides = ents.grep(Sketchup::ConstructionLine).size - 1
+      wipe
+      bead = box_group.call(-50, -50, 100, 100, 100)
+      arc = ents.add_arc(pt(0, 1000), Geom::Vector3d.new(0, -1, 0), Geom::Vector3d.new(0, 0, 1), 1000.mm, 0, Math::PI, 48)
+      sel(bead, arc)
+      r2 = run(:path_array, mode: :chord, spacing: 500.mm.to_f, follow: false)
+      cs = groups.drop(1).map { |x| x.bounds.center }
+      chords = cs.each_cons(2).map { |a, b| mm(a.distance(b)).round }.uniq
+      wipe
+      gs = [[0, 0], [700, 1500], [3000, 300]].map { |x, y| box_group.call(x, y, 200, 200, 200) }
+      sel(gs)
+      r3 = run(:align_objects, axis: :x, mode: :center, reference: :bounds)
+      xs = gs.map { |x| mm(x.bounds.center.x).round }.uniq
+      wipe
+      g = box_group.call(0, 0, 100, 100, 100)
+      sel(g)
+      r4 = run(:rectangular_array, cols: 3, rows: 2, levels: 1, dx: 1000.mm.to_f, dy: 1000.mm.to_f, dz: 0.0, pattern: :staggered)
+      row2 = groups.select { |x| mm(x.bounds.min.y).round == 1000 }.map { |x| mm(x.bounds.min.x).round }.sort
+      [r1[:ok] && guides == 2 && r2[:ok] && chords.size == 1 && (chords.first - 500).abs <= 1 && r3[:ok] && xs == [1600] &&
+        r4[:ok] && row2 == [500, 1500, 2500], "guides=#{guides} chords=#{chords} xs=#{xs} row2=#{row2}"]
+    end
+
+
+    check('jhs pick tool: mirror finishes by Enter after 2 points') do
+      g = ents.add_group
+      g.entities.add_face(pt(500, 0), pt(900, 0), pt(900, 300), pt(500, 300))
+      sel(g)
+      tool = AT::PickTool.new(AT::Registry[:mirror], AT::Prefs.values(AT::Registry[:mirror]).merge(place: false, copy: false))
+      tool.instance_variable_set(:@points, [pt(0, -100), pt(0, 100)])
+      tool.instance_variable_set(:@picked, [{}, {}])
+      tool.onReturn(model.active_view)
+      x = [mm(g.bounds.min.x).round, mm(g.bounds.max.x).round]
+      [x == [-900, -500], "x=#{x}"]
+    end
+
+
+    check('jhs ffd custom lattice, lock and unlock by the tool') do
+      g = box_group.call(0, 0, 1000, 600, 400)
+      sel(g)
+      r1 = run(:ffd, mode: :create, lattice: :custom, nx: 2, ny: 3, nz: 2)
+      lat = groups.find { |x| x.name == AT.t(:name_ffd_lattice) }
+      n = lat.entities.grep(Sketchup::ConstructionPoint).size
+      e = ents.add_line(pt(0, 2000), pt(1000, 2000))
+      sel(e)
+      r2 = run(:ffd, mode: :lock)
+      locked = e.get_attribute(AT::FFD::DICT, 'locked')
+      sel(e)
+      r3 = run(:ffd, mode: :unlock)
+      [r1[:ok] && n == 12 && r2[:ok] && locked == true && r3[:ok] && e.get_attribute(AT::FFD::DICT, 'locked').nil?,
+       "points=#{n} locked=#{locked.inspect}"]
     end
 
     # Покрытие считаем по функциональным проверкам — до проверок отказа.

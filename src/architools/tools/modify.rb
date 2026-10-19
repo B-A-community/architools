@@ -137,8 +137,11 @@ module BACommunity
       def path_frames(points, vertical = false)
         points.each_cons(2).map do |a, b|
           t = (b - a).normalize
-          if vertical && !t.parallel?(G::Z)
-            next { t: t, up: G::Z.clone, side: t.cross(G::Z).normalize }
+          # vertical: true — «вверх» по мировой Z; Vector3d — своё «вверх»
+          # (Upright Extruder: ввод вектора или по выделенному ребру).
+          upv = vertical.is_a?(Geom::Vector3d) ? vertical.normalize : G::Z
+          if vertical && !t.parallel?(upv)
+            next { t: t, up: upv.clone, side: t.cross(upv).normalize }
           end
 
           up = G::Z - G.scale(t, G::Z.dot(t))
@@ -258,6 +261,10 @@ module BACommunity
     end
 
     Registry.define(:extrude_path, :modify) do |p|
+      p.choice :upright, :z, %i[z vector edge]
+      p.float :up_x, 0, show: { upright: :vector }
+      p.float :up_y, 0, show: { upright: :vector }
+      p.float :up_z, 1, show: { upright: :vector }
       p.bool :smooth, true
       p.bool :erase_profile, false
     end.run do |ctx|
@@ -267,6 +274,20 @@ module BACommunity
       profile_edges = face.edges
       path_edges = ctx.edges - profile_edges
       chains = Geom3.chains(path_edges)
+      up = Geom3::Z.clone
+      case ctx.p[:upright]
+      when :vector
+        up = Geom::Vector3d.new(ctx.p[:up_x], ctx.p[:up_y], ctx.p[:up_z])
+        ctx.need(up.length.to_f > 1.0e-9, :err_up_vector)
+      when :edge
+        # Отдельное одиночное ребро задаёт «вверх»; путь — другая цепочка.
+        single = chains.select { |c| c[:edges].size == 1 }
+        ctx.need(chains.size == 2 && !single.empty?, :need_up_edge)
+        upc = single.min_by { |c| Geom3.polyline_length(c[:points]) }
+        chains -= [upc]
+        up = upc[:points][1] - upc[:points][0]
+        up = up.reverse if up.z.negative?
+      end
       ctx.need(chains.size == 1 && chains.first[:points].size >= 2, :need_profile_path)
       chain = chains.first
       pts = chain[:points]
@@ -277,14 +298,14 @@ module BACommunity
         i = pts.each_with_index.min_by { |pt, _| pt.distance(center).to_f }.last
         pts = pts.rotate(i)
       end
-      frame0 = ModifyTools.path_frames(pts.first(2), true).first
+      frame0 = ModifyTools.path_frames(pts.first(2), up).first
       to2d = lambda do |q|
         d = q - pts.first
         [d.dot(frame0[:side]), d.dot(frame0[:up])]
       end
       loops2d = face.loops.map { |l| l.vertices.map { |v| to2d.call(v.position) } }
       caps2d = ModifyTools.face_polygons(face).map { |poly| poly.map { |q| to2d.call(q) } }
-      polys = ModifyTools.sweep(pts, chain[:closed], loops2d, caps2d, vertical: true)
+      polys = ModifyTools.sweep(pts, chain[:closed], loops2d, caps2d, vertical: up)
       g = Geom3.mesh_group(ctx.entities, polys, ctx.name(:sweep))
       ModifyTools.merge_coplanar(g.entities)
       ModifyTools.soften_smooth(g.entities, 30) if ctx.p[:smooth]
@@ -347,7 +368,7 @@ module BACommunity
     Registry.define(:align_objects, :modify) do |p|
       p.choice :axis, :x, %i[x y z]
       p.choice :mode, :min, %i[min center max distribute]
-      p.choice :reference, :extreme, %i[extreme largest], show: { mode: %i[min center max] }
+      p.choice :reference, :extreme, %i[extreme largest bounds], show: { mode: %i[min center max] }
     end.run do |ctx|
       objects = ctx.objects
       ctx.need(objects.size >= 2, :need_two_objects)
@@ -371,6 +392,11 @@ module BACommunity
         pick = { min: lo, center: mid, max: hi }[mode]
         target =
           if ctx.p[:reference] == :largest then pick.call(objects.max_by { |o| o.bounds.diagonal.to_f })
+          elsif ctx.p[:reference] == :bounds
+            # Общий габарит выделения, как Center on Red / Green / Blue в JHS.
+            all = Geom::BoundingBox.new
+            objects.each { |o| all.add(o.bounds) }
+            { min: all.min, center: all.center, max: all.max }[mode].to_a[i].to_f
           elsif mode == :min then objects.map(&lo).min
           elsif mode == :max then objects.map(&hi).max
           else objects.map(&mid).sum / objects.size

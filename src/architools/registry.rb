@@ -119,8 +119,9 @@ module BACommunity
         # по двойному клику или Enter), min — минимум для «сколько угодно»,
         # prompts — ключи подсказок по порядку, check — проверка выделения
         # до начала кликов.
-        def picks(count: nil, min: 1, prompts: [], check: nil)
-          @tool.picks = { count: count, min: min, prompts: prompts, check: check }
+        # max — для «сколько угодно» закончить автоматически на этой точке.
+        def picks(count: nil, min: 1, max: nil, prompts: [], check: nil)
+          @tool.picks = { count: count, min: min, max: max, prompts: prompts, check: check }
           self
         end
 

@@ -19,7 +19,7 @@ words = src.scan(/%i\[([^\]]+)\]/).flatten.flat_map(&:split).uniq
 # Подсказки кликов (pk_*) — ключи словаря сами по себе.
 words.select { |c| c.start_with?('pk_') }.each { |k| problems << "нет #{k}" unless ru.include?(k.to_sym) }
 words.each do |c|
-  next if %w[edges modify walls facade stairs framing site lang points picked].include?(c) || c.start_with?('pk_')
+  next if %w[edges modify walls facade stairs framing site modeling lang points picked].include?(c) || c.start_with?('pk_')
   problems << "нет c_#{c}" unless ru.any? { |k| k.to_s == "c_#{c}" || (k.to_s.start_with?('c_') && k.to_s.end_with?("_#{c}")) }
 end
 src.scan(/(?:ArchiTools\.t|ctx\.need\([^,]+,) ?\(?:(\w+)/).flatten.uniq.each do |k|

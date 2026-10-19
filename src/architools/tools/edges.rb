@@ -355,6 +355,7 @@ module BACommunity
       p.length :distance, 100
       p.bool :both_sides, false
       p.bool :flip, false
+      p.choice :output, :edges, %i[edges guides]
     end.run do |ctx|
       chains = Geom3.chains(ctx.edges)
       ctx.need(!chains.empty?, :need_edges)
@@ -377,7 +378,12 @@ module BACommunity
         dists.each do |dist|
           out = Geom3.offset_polyline(pts, dist * sign, n, chain[:closed])
           out << out.first if chain[:closed]
-          ctx.made(ctx.entities.add_curve(out))
+          if ctx.p[:output] == :guides
+            # Как Offset Edge в JHS: смещение — направляющими.
+            out.each_cons(2) { |a, b| ctx.made(ctx.entities.add_cline(a, b)) }
+          else
+            ctx.made(ctx.entities.add_curve(out))
+          end
         end
       end
       ArchiTools.t(:ok_offset, n: chains.size)

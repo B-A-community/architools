@@ -2,7 +2,7 @@
 
 Протокол живого прогона `python test/bridge.py test/live_tools.rb` в SketchUp 2024 (24.0.484). Пересобирается командой `python test/make_report.py <вывод прогона>`.
 
-Дата: 2026-10-19 · проверок: **142 из 142** · функций 1001bit: **40 из 40**
+Дата: 2026-10-19 · проверок: **183 из 183** · функций 1001bit: **40 из 40** · команд JHS Powerbar: **47 из 47**
 
 ## 40 функций 1001bit Tools
 
@@ -12,10 +12,10 @@
 |---|---|---|---|---|
 | 1 | Point on face | Точка на грани | 1 | ✅ |
 | 2 | Divide | Деление ребра | 2 | ✅ |
-| 3 | Align selected entities | Выровнять по 3 точкам | 2 | ✅ |
+| 3 | Align selected entities | Выровнять по 3 точкам | 3 | ✅ |
 | 4 | Perpendicular line | Перпендикуляр; Перпендикуляр к грани | 2 | ✅ |
 | 5 | Face on plane | Грань на плоскости | 1 | ✅ |
-| 6 | Best fit face | Грань по неплоским точкам | 2 | ✅ |
+| 6 | Best fit face | Грань по неплоским точкам | 3 | ✅ |
 | 7 | Extrude along sloping curve path | Профиль по пути | 1 | ✅ |
 | 8 | Extrude maintaining taper | Выдавить с сужением | 1 | ✅ |
 | 9 | Revolved surface | Тело вращения | 2 | ✅ |
@@ -50,6 +50,60 @@
 | 38 | Cut and fill site | Площадка: срезка и подсыпка | 1 | ✅ |
 | 39 | Trace boundaries | Граница на рельефе | 1 | ✅ |
 | 40 | Contour lines | Горизонтали | 1 | ✅ |
+
+## 47 команд JHS Powerbar
+
+Список и авторы — из файлов самого плагина JHS Powerbar 2020.1 (`jhs_pb.strings`, сборка CadFather). Код не копировался: поведение написано заново. Команда зелёная, только если прошли все её проверки.
+
+| Код | JHS Powerbar | Автор | ArchiTools | Проверок | |
+|---|---|---|---|---|---|
+| pb00 | AMS Smooth Dialog | A. Synytsia | Сглаживание рёбер — по углу | 1 | ✅ |
+| pb01 | AMS Smooth Run | A. Synytsia | Сглаживание рёбер — последние настройки | 1 | ✅ |
+| pb02 | Smooze Lite | M. Noblet | Сглаживание рёбер — по углу | 1 | ✅ |
+| pb03 | Smooze Hard | M. Noblet | Сглаживание рёбер — сгладить все | 1 | ✅ |
+| pb04 | UnSmooze | M. Noblet | Сглаживание рёбер — снять | 1 | ✅ |
+| pb05 | AMS Smooth to Quadrants | A. Synytsia | Сглаживание рёбер — четырёхугольники | 1 | ✅ |
+| pb06 | Upright Extruder | J. Eneroth | Профиль по пути (отвесно) | 2 | ✅ |
+| pb07 | Upright Extruder Input | J. Eneroth | Профиль по пути — вертикаль по вектору | 1 | ✅ |
+| pb08 | Upright Extruder Edge | J. Eneroth | Профиль по пути — вертикаль по ребру | 1 | ✅ |
+| pb09 | Face Finder | Ithil | Найти грани | 1 | ✅ |
+| pb10 | Offset Edge | SD Mitch | Смещение рёбер — направляющими | 1 | ✅ |
+| pb11 | Extrude Lines | D. Bur | Выдавить линии | 1 | ✅ |
+| pb12 | Extrude Along Path | R. Wilson | Профиль по пути | 1 | ✅ |
+| pb13 | Pipe Along Path | TIG | Сечение по пути (труба) | 1 | ✅ |
+| pb14 | Lines to Tube | D. Bur | Линии в трубы | 1 | ✅ |
+| pb15 | Copy Along Path | R. Wilson | Массив по пути | 2 | ✅ |
+| pb16 | Copy Comps Path | SD Mitch | Массив по пути — бусы | 1 | ✅ |
+| pb17 | Center on Red | Pixero | Выровнять объекты — к общему центру по X | 1 | ✅ |
+| pb18 | Center on Green | Pixero | Выровнять объекты — к общему центру по Y | 2 | ✅ |
+| pb19 | Center on Blue | Pixero | Выровнять объекты — к общему центру по Z | 2 | ✅ |
+| pb20 | Comps to Grid Array | SD Mitch | Прямоугольный массив — сетка и шахматный | 2 | ✅ |
+| pb21 | Drop at Intersection | R. Wilson | Опустить — на поверхность | 1 | ✅ |
+| pb22 | Drop at Level | R. Wilson | Опустить — на отметку | 1 | ✅ |
+| pb23 | Mirror | TIG | Зеркало | 2 | ✅ |
+| pb24 | SuperWeld | TIG | Сварить рёбра | 1 | ✅ |
+| pb25 | Explode All Curves | CadFather | Распустить кривые | 1 | ✅ |
+| pb26 | Equalise Curve Segments | SD Mitch | Равные сегменты | 1 | ✅ |
+| pb27 | JS Mover | Pixero | Сдвинуть на вектор | 1 | ✅ |
+| pb28 | Align Tool | D. Bur | Выровнять по 3 точкам | 1 | ✅ |
+| pb29 | 3D Rotate | J. Eneroth | Поворот вокруг оси | 1 | ✅ |
+| pb30 | Rotix | TBD | Rotix — поворот стрелками | 1 | ✅ |
+| pb31 | Random Scale | TBD | Случайный масштаб и поворот | 1 | ✅ |
+| pb32 | Random Rotate | TBD | Случайный масштаб и поворот | 1 | ✅ |
+| pb33 | Random Scale & Rotate | TBD | Случайный масштаб и поворот | 1 | ✅ |
+| pb34 | Proxify Components | SD Mitch | Прокси компонентов | 1 | ✅ |
+| pb35 | Composwapper | R. Wilson | Заменить компоненты | 1 | ✅ |
+| pb36 | SketchyFFD 3x3x3 | mindsightstudios | FFD — решётка 3×3×3 | 1 | ✅ |
+| pb36b | SketchyFFD 4x4x4 | mindsightstudios | FFD — решётка 4×4×4 | 1 | ✅ |
+| pb37 | SketchyFFD Input Box | mindsightstudios | FFD — своя решётка | 1 | ✅ |
+| pb38 | SketchyFFD Lock Edges | mindsightstudios | FFD — зафиксировать рёбра | 2 | ✅ |
+| pb39 | SketchyFFD Unlock Edges | mindsightstudios | FFD — снять фиксацию | 1 | ✅ |
+| pb40 | Mesh Maker | SD Mitch | Сетка на грани — по ячейке | 1 | ✅ |
+| pb41 | SubDivide Face | SD Mitch | Сетка на грани — по делениям | 1 | ✅ |
+| pb42 | Split Up | TIG | Split Up | 1 | ✅ |
+| pb43 | C-Points at Vertex | TIG | Точки в вершины | 1 | ✅ |
+| pb44 | Connect Cpoints with Line | SD Mitch | Соединить точки | 1 | ✅ |
+| pb45 | Comps to C-Points | ThomThom | Компонент в точки | 1 | ✅ |
 
 ## Что проверяется
 
@@ -164,6 +218,26 @@
 | ✅ | open chain direction is fixed: slope and offset | z={[2000, 500]=>250, [2000, 0]=>200, [0, 0]=>0} y=[0, 100] |
 | ✅ | louvres: all seven blade profiles, positions, erase face | [[:flat, true], [:sheet, true], [:oval, true], [:round, true], [:rhs, true], [:channel, true], [:airfoil, true], [:middle, true], [:back, true]] |
 | ✅ | slope edges: keep original, slope a copy | edges=4 flat=2 top=600 |
+| ✅ | jhs soften: angle, all, none, quadrants | angle=16 none=0 all=48 quads=2 |
+| ✅ | jhs weld, explode, equal segments | welded=1 lens=[500] |
+| ✅ | jhs face finder in group and loose | Найдено граней: 2. |
+| ✅ | jhs extrude lines and lines to tubes | area=7500000 parts=5 |
+| ✅ | jhs drop below and to level | a=867 b=1200 |
+| ✅ | jhs c-points at vertices, connect, component to points | cps=4 line=4 [[0, 0, 0], [0, 1000, 0], [2000, 0, 0], [2000, 1000, 0]] |
+| ✅ | jhs mirror: 2-point plan plane, 3-point plane, copy, loose geometry | xs=[[-1500, -1000], [1000, 1500]] z=[1800, 2000] edges=[-500, -100, 100, 500] |
+| ✅ | jhs rotate about axis and move by vector | c=[-250, 1250] |
+| ✅ | jhs random scale and rotate is reproducible | heights=[173, 282, 443, 300, 231, 354] |
+| ✅ | jhs rotix: arrow keys rotate, axis change, flip | after right=[200, 1000] axis=1 |
+| ✅ | jhs proxify toggle and restore all | proxy=Proxy · ATLive heavy#5 both=["Proxy · ATLive heavy#5", "Proxy · ATLive heavy#5"] back=["ATLive heavy#5", "ATLive heavy#5"] |
+| ✅ | jhs composwapper: one sample replaces many | Заменено экземпляров: 3 → ATLive chair B#5. |
+| ✅ | jhs mesh maker: cells, rotated guides, divisions | cells=32 guides=13 div=15 |
+| ✅ | jhs split up: 4×4 and 3×3 | n=16 box=96 manifold=true |
+| ✅ | jhs FFD: lattice moves the shape, lock keeps edges, finish bakes | moved=true low=0 n=1 |
+| ✅ | jhs ffd lock/unlock refusal and 4x4x4 | Откройте группу и выделите рёбра, которые нужно зафиксировать или освободить. |
+| ✅ | jhs upright extruder: vector and by edge | Профиль проведён по пути. / Профиль проведён по пути. |
+| ✅ | jhs offset as guides, chord string, bounds align, staggered grid | guides=2 chords=[500] xs=[1600] row2=[500, 1500, 2500] |
+| ✅ | jhs pick tool: mirror finishes by Enter after 2 points | x=[-900, -500] |
+| ✅ | jhs ffd custom lattice, lock and unlock by the tool | points=12 locked=true |
 | ✅ | empty selection refused: fillet | Выделите два ребра (или цепочку рёбер). |
 | ✅ | empty selection refused: chamfer | Выделите два ребра (или цепочку рёбер). |
 | ✅ | empty selection refused: extend_edges | Выделите два ребра — или рёбра и одну грань. |
@@ -205,6 +279,27 @@
 | ✅ | empty selection refused: profile_sweep | Выделите рёбра. |
 | ✅ | empty selection refused: cut_fill | Выделите рельеф — группу или компонент с поверхностью. |
 | ✅ | empty selection refused: trace_boundary | Выделите рельеф — группу или компонент с поверхностью. |
+| ✅ | empty selection refused: soften_edges | Выделите рёбра, грани, группы или компоненты. |
+| ✅ | empty selection refused: weld_edges | Нужна цепочка хотя бы из двух соединённых рёбер. |
+| ✅ | empty selection refused: explode_curves | В выделении нет кривых. |
+| ✅ | empty selection refused: equalize_curve | Выделите рёбра. |
+| ✅ | empty selection refused: face_finder | Выделите рёбра, грани, группы или компоненты. |
+| ✅ | empty selection refused: extrude_lines | Выделите рёбра. |
+| ✅ | empty selection refused: lines_to_tubes | Выделите рёбра. |
+| ✅ | empty selection refused: drop | Выделите группы или компоненты. |
+| ✅ | empty selection refused: cpoints_at_vertices | Выделите рёбра. |
+| ✅ | empty selection refused: connect_cpoints | Выделите хотя бы две точки-направляющие. |
+| ✅ | empty selection refused: comps_to_cpoints | Выделите одну группу или компонент и точки-направляющие. |
+| ✅ | empty selection refused: mirror | Выделите объекты или геометрию. |
+| ✅ | empty selection refused: rotate_3d | Выделите объекты или геометрию. |
+| ✅ | empty selection refused: random_transform | Выделите группы или компоненты. |
+| ✅ | empty selection refused: move_by | Выделите объекты или геометрию. |
+| ✅ | empty selection refused: rotix | Выделите группы или компоненты. |
+| ✅ | empty selection refused: proxify | Выделите компоненты. |
+| ✅ | empty selection refused: composwapper | Выделите экземпляр-образец и экземпляры другого компонента. |
+| ✅ | empty selection refused: mesh_maker | Выделите грани. |
+| ✅ | empty selection refused: split_up | Выделите четырёхугольные грани (без дыр). |
+| ✅ | empty selection refused: ffd | Выделите одну группу или компонент. |
 | ✅ | one undo step per run | [[:wall, 3, 4, 3], [:louvres, 6, 7, 6], [:straight_stairs, 1, 2, 1]] |
 | ✅ | refusals are clean | Выделите два ребра (или цепочку рёбер). |
-| ✅ | every tool has a live check | 53 tools |
+| ✅ | every tool has a live check | 74 tools |

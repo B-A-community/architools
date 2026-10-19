@@ -53,8 +53,8 @@ module BACommunity
         @points << @ip.position
         @picked << describe(@ip)
         view.invalidate
-        count = @tool.picks[:count]
-        count && @points.size >= count ? finish : status
+        limit = @tool.picks[:count] || @tool.picks[:max]
+        limit && @points.size >= limit ? finish : status
       end
 
       def onLButtonDoubleClick(_flags, _x, _y, _view)
@@ -93,7 +93,7 @@ module BACommunity
       private
 
       def describe(ip)
-        info = { vertex: ip.vertex, edge: ip.edge, face: ip.face }
+        info = { vertex: ip.vertex, edge: ip.edge, face: ip.face, instance: ip.instance_path.to_a.find { |e| e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance) } }
         t = ip.transformation
         if ip.edge
           a = ip.edge.start.position.transform(t)
