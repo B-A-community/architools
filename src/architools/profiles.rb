@@ -77,14 +77,42 @@ module BACommunity
         pts.each_with_index.sum { |(a, b), i| c, d = pts[(i + 1) % pts.size]; a * d - c * b } / 2.0
       end
 
+      # Прямой брус сечением loops от p0 до p1; b сечения смотрит по up
+      # (например, по нормали грани), a — вбок.
+      def bar(entities, p0, p1, up, loops, name = nil)
+        t = (p1 - p0).normalize
+        up = up - G.scale(t, up.dot(t))
+        up = up.normalize
+        side = t.cross(up).normalize
+        loops = loops.each_with_index.map do |l, i|
+          ccw = signed_area(l).positive?
+          (i.zero? ? ccw : !ccw) ? l : l.reverse
+        end
+        ring = ->(o, l) { l.map { |a, b| o.offset(side, a).offset(up, b) } }
+        polys = []
+        loops.each do |l|
+          r0 = ring.call(p0, l)
+          r1 = ring.call(p1, l)
+          r0.each_index { |i| j = (i + 1) % r0.size; polys << [r0[i], r0[j], r1[j], r1[i]] }
+        end
+        cap_triangles(entities, loops).each do |tri|
+          polys << ring.call(p0, tri).reverse
+          polys << ring.call(p1, tri)
+        end
+        g = G.mesh_group(entities, polys, name)
+        ModifyTools.merge_coplanar(g.entities)
+        ModifyTools.orient_outward(g.entities)
+        g
+      end
+
       # Тело: сечение, проведённое по пути (точки), без закручивания.
-      def sweep_group(entities, points, closed, loops, name, smooth: true)
+      def sweep_group(entities, points, closed, loops, name, smooth: true, vertical: false)
         loops = loops.each_with_index.map do |l, i|
           ccw = signed_area(l).positive?
           (i.zero? ? ccw : !ccw) ? l : l.reverse
         end
         caps = closed ? [] : cap_triangles(entities, loops)
-        polys = ModifyTools.sweep(points, closed, loops, caps)
+        polys = ModifyTools.sweep(points, closed, loops, caps, vertical: vertical)
         g = G.mesh_group(entities, polys, name)
         ModifyTools.merge_coplanar(g.entities)
         ModifyTools.orient_outward(g.entities)

@@ -109,6 +109,54 @@ module BACommunity
         [t, normal]
       end
 
+      # Слои стены в сечении (a — вправо от линии, b — вверх): сплошная,
+      # с воздушной прослойкой, перегородка (две обшивки, между ними стойки)
+      # или своё сечение по выделенной грани.
+      def wall_layers(prm, face = nil)
+        h = prm[:height]
+        rect = ->(a0, a1) { [[[a0, 0.0], [a1, 0.0], [a1, h], [a0, h]]] }
+        if face
+          pts = face.outer_loop.vertices.map(&:position)
+          cx = (pts.map(&:x).min + pts.map(&:x).max) / 2.0
+          y0 = pts.map(&:y).min
+          return [[pts.map { |pt| [pt.x - cx, pt.y - y0] }]]
+        end
+
+        widths =
+          case prm[:kind]
+          when :cavity then [prm[:leaf], prm[:cavity], prm[:leaf_inner]]
+          when :stud then [prm[:leaf], prm[:cavity], prm[:leaf]]
+          else [prm[:thickness]]
+          end
+        raise UserError, ArchiTools.t(:err_distance) if widths.any? { |w| w <= G.tol } || h <= G.tol
+
+        total = widths.sum
+        a0 = { center: -total / 2.0, left: -total, right: 0.0 }[prm[:align]]
+        bounds = widths.each_with_object([a0]) { |w, acc| acc << acc.last + w }
+        layers = bounds.each_cons(2).map { |x0, x1| rect.call(x0, x1) }
+        prm[:kind] == :solid ? layers : [layers[0], layers[2]]
+      end
+
+      # Стойки перегородки: в прослойке, с шагом и на каждом изломе.
+      def studs(entities, pts, closed, prm, h, name)
+        widths = [prm[:leaf], prm[:cavity], prm[:leaf]]
+        a0 = { center: -widths.sum / 2.0, left: -widths.sum, right: 0.0 }[prm[:align]] + widths[0]
+        sw = prm[:stud_width]
+        raise UserError, ArchiTools.t(:err_distance) if sw <= G.tol || prm[:stud_spacing] <= sw
+
+        path = closed ? pts + [pts.first] : pts
+        stations = Railing.post_points(path, prm[:stud_spacing])
+        stations.pop if closed
+        stations.each do |pt|
+          seg = path.each_cons(2).find { |a, b| (a.distance(pt).to_f + pt.distance(b).to_f - a.distance(b).to_f).abs < 1.0e-6 }
+          dir = (seg[1] - seg[0])
+          dir = Geom::Vector3d.new(dir.x, dir.y, 0).normalize
+          side = dir.cross(G::Z).normalize
+          origin = pt.offset(side, a0).offset(dir, -sw / 2.0)
+          G.box(entities, origin, G.scale(dir, sw), G.scale(side, prm[:cavity]), G.scale(G::Z, h), name)
+        end
+      end
+
       # Контур проёма в осях грани (u вправо, v вверх).
       def opening_outline(shape, u0, v0, w, h, segments)
         r = w / 2.0
@@ -179,44 +227,45 @@ module BACommunity
     end
 
     Registry.define(:wall, :walls) do |p|
-      p.length :thickness, 250
+      p.choice :kind, :solid, %i[solid cavity stud]
+      p.length :thickness, 250, show: { kind: :solid }
       p.length :height, 3000
       p.choice :align, :center, %i[center left right]
+      p.length :leaf, 100, show: { kind: %i[cavity stud] }
+      p.length :leaf_inner, 100, show: { kind: :cavity }
+      p.length :cavity, 50, show: { kind: %i[cavity stud] }
+      p.length :stud_spacing, 600, show: { kind: :stud }
+      p.length :stud_width, 50, show: { kind: :stud }
+      p.bool :follow_slope, false
     end.run do |ctx|
-      chains = Geom3.chains(ctx.edges)
+      profile_face = ctx.faces.first if ctx.faces.size == 1
+      edges = ctx.edges - (profile_face ? profile_face.edges : [])
+      chains = Geom3.chains(edges)
       ctx.need(!chains.empty?, :need_edges)
-      t = ctx.p[:thickness]
-      h = ctx.p[:height]
-      ctx.need(t > Geom3.tol && h > Geom3.tol, :err_distance)
-      offsets = { center: [t / 2.0, -t / 2.0], left: [t, 0.0], right: [0.0, -t] }[ctx.p[:align]]
+      prm = ctx.p
+      h = prm[:height]
+      layers = WallTools.wall_layers(prm, profile_face)
       chains.each do |chain|
-        z = chain[:points].map(&:z).min
-        pts = chain[:points].map { |pt| Geom::Point3d.new(pt.x, pt.y, z) }
+        pts = chain[:points]
         next if pts.size < 2
 
+        unless prm[:follow_slope]
+          z = pts.map { |pt| pt.z.to_f }.min
+          pts = pts.map { |pt| Geom::Point3d.new(pt.x, pt.y, z) }
+        end
         # Замкнутый контур ведём против часовой: «слева» — внутрь.
         pts = pts.reverse if chain[:closed] && WallTools.signed_area_xy(pts).negative?
-        a = Geom3.offset_polyline(pts, offsets[0], Geom3::Z, chain[:closed])
-        b = Geom3.offset_polyline(pts, offsets[1], Geom3::Z, chain[:closed])
+        pts = Geom3.canonical(pts) unless chain[:closed]
+        if layers.size == 1 && prm[:kind] != :stud
+          ctx.made(Profiles.sweep_group(ctx.entities, pts, chain[:closed], layers.first, ctx.name(:wall), smooth: false,
+                                                                                       vertical: true))
+          next
+        end
+
         g = ctx.entities.add_group
         g.name = ctx.name(:wall)
-        if chain[:closed]
-          outer, inner = [a, b].sort_by { |ring| -WallTools.signed_area_xy(ring).abs }
-          inner = nil if WallTools.signed_area_xy(inner).abs < 1.0e-6
-          face = g.entities.add_face(outer)
-          ctx.need(face, :err_face_failed)
-          if inner
-            hole = g.entities.add_face(inner)
-            hole&.erase!
-          end
-          face = g.entities.grep(Sketchup::Face).first
-        else
-          face = g.entities.add_face(a + b.reverse)
-          ctx.need(face, :err_face_failed)
-        end
-        face.reverse! if face.normal.z.negative?
-        face.pushpull(h)
-        ModifyTools.orient_outward(g.entities)
+        layers.each { |loops| Profiles.sweep_group(g.entities, pts, chain[:closed], loops, ctx.name(:leaf_layer), smooth: false, vertical: true) }
+        WallTools.studs(g.entities, pts, chain[:closed], prm, h, ctx.name(:stud)) if prm[:kind] == :stud
         ctx.made(g)
       end
       ArchiTools.t(:ok_wall, n: chains.size)
@@ -283,61 +332,112 @@ module BACommunity
     end
 
     Registry.define(:window, :walls) do |p|
-      p.int :cols, 2, min: 1, max: 50
-      p.int :rows, 1, min: 1, max: 50
+      p.choice :type, :fixed, %i[fixed casement sliding]
+      p.int :cols, 2, min: 1, max: 50, show: { type: %i[fixed casement] }
+      p.int :rows, 1, min: 1, max: 50, show: { type: %i[fixed casement] }
+      p.choice :profile, :flat, %i[flat rebated casing]
+      p.choice :position, :back, %i[back middle front]
       p.length :frame_width, 60
       p.length :frame_depth, 70
-      p.length :mullion, 50
+      p.length :mullion, 50, show: { type: %i[fixed casement] }
+      p.length :sash_width, 50, show: { type: %i[casement sliding] }
       p.length :inset, 0
       p.bool :glass, true
     end.run do |ctx|
       rects = WallTools.rects_for(ctx)
       rects.each do |o, u, v, n, w, h|
-        fw = ctx.p[:frame_width]
-        fd = ctx.p[:frame_depth]
-        mw = ctx.p[:mullion]
-        cols = ctx.p[:cols]
-        rows = ctx.p[:rows]
+        prm = ctx.p
+        fw = prm[:frame_width]
+        fd = prm[:frame_depth]
+        mw = prm[:mullion]
+        sw = prm[:sash_width]
+        sliding = prm[:type] == :sliding
+        cols = sliding ? 2 : prm[:cols]
+        rows = sliding ? 1 : prm[:rows]
         iw = w - 2 * fw
         ih = h - 2 * fw
-        pw = (iw - (cols - 1) * mw) / cols
-        ph = (ih - (rows - 1) * mw) / rows
-        ctx.need(pw > Geom3.tol && ph > Geom3.tol, :err_window_small)
+        ctx.need(iw > Geom3.tol && ih > Geom3.tol, :err_window_small)
 
-        o = o.offset(n, -ctx.p[:inset])
+        # Положение рамы относительно грани: за ней, посередине, перед ней.
+        o = o.offset(n, { back: 0.0, middle: fd / 2.0, front: fd }[prm[:position]] - prm[:inset])
         depth = Geom3.scale(n, -fd)
         win = ctx.entities.add_group
         win.name = ctx.name(:window)
         e = win.entities
-        at = ->(a, b) { Geom3.from_uv(a, b, o, u, v) }
-        outer = [at[0, 0], at[w, 0], at[w, h], at[0, h]]
-        inner = [at[fw, fw], at[w - fw, fw], at[w - fw, h - fw], at[fw, h - fw]]
-        frame = WallTools.frame_prism(e, outer, inner, depth, ctx.name(:frame))
-        frame.material = WallTools.material(ctx.model, :frame)
-        (1...cols).each do |i|
-          x = fw + i * pw + (i - 1) * mw
-          m = Geom3.box(e, at[x, fw], Geom3.scale(u, mw), Geom3.scale(v, ih), depth, ctx.name(:mullion))
-          m.material = frame.material
+        at = ->(x, y, z = 0.0) { Geom3.from_uv(x, y, o, u, v, z, n) }
+        rect = ->(x0, y0, x1, y1, z = 0.0) { [at[x0, y0, z], at[x1, y0, z], at[x1, y1, z], at[x0, y1, z]] }
+        frame_mat = WallTools.material(ctx.model, :frame)
+        frame = WallTools.frame_prism(e, rect[0, 0, w, h], rect[fw, fw, w - fw, h - fw], depth, ctx.name(:frame))
+        frame.material = frame_mat
+        case prm[:profile]
+        when :rebated
+          # Четверть: узкий выступ внутрь проёма на трети глубины рамы.
+          lip = [fw / 2.0, 20.mm.to_f].min
+          z = -fd / 3.0
+          r = WallTools.frame_prism(e, rect[fw, fw, w - fw, h - fw, z], rect[fw + lip, fw + lip, w - fw - lip, h - fw - lip, z],
+                                    Geom3.scale(n, -fd / 3.0), ctx.name(:frame))
+          r.material = frame_mat
+          fw += lip
+          iw -= 2 * lip
+          ih -= 2 * lip
+        when :casing
+          # Наличник: плоская рамка снаружи по стене вокруг проёма.
+          cw = fw
+          r = WallTools.frame_prism(e, rect[-cw, -cw, w + cw, h + cw, 20.mm.to_f], rect[0, 0, w, h, 20.mm.to_f],
+                                    Geom3.scale(n, -20.mm.to_f), ctx.name(:casing))
+          r.material = frame_mat
         end
-        (1...rows).each do |j|
-          y = fw + j * ph + (j - 1) * mw
-          m = Geom3.box(e, at[fw, y], Geom3.scale(u, iw), Geom3.scale(v, mw), depth, ctx.name(:mullion))
-          m.material = frame.material
+
+        glass_group = nil
+        add_glass = lambda do |quad|
+          next unless prm[:glass]
+
+          glass_group ||= e.add_group.tap { |g| g.name = ctx.name(:glass) }
+          glass_group.entities.add_face(quad)
         end
-        if ctx.p[:glass]
-          glass = e.add_group
-          glass.name = ctx.name(:glass)
-          shift = Geom3.scale(n, -fd / 2.0)
+
+        if sliding
+          # Две створки внахлёст в разных плоскостях: передняя и задняя.
+          lap = sw
+          leaf = (iw + lap) / 2.0
+          [[fw, -fd * 0.25], [fw + iw - leaf, -fd * 0.75]].each do |x0, zc|
+            z0 = zc + fd * 0.2
+            sash = WallTools.frame_prism(e, rect[x0, fw, x0 + leaf, h - fw, z0],
+                                         rect[x0 + sw, fw + sw, x0 + leaf - sw, h - fw - sw, z0],
+                                         Geom3.scale(n, -fd * 0.4), ctx.name(:sash))
+            sash.material = frame_mat
+            add_glass.call(rect[x0 + sw, fw + sw, x0 + leaf - sw, h - fw - sw, zc])
+          end
+        else
+          pw = (iw - (cols - 1) * mw) / cols
+          ph = (ih - (rows - 1) * mw) / rows
+          ctx.need(pw > Geom3.tol && ph > Geom3.tol, :err_window_small)
+          (1...cols).each do |i|
+            x = fw + i * pw + (i - 1) * mw
+            Geom3.box(e, at[x, fw], Geom3.scale(u, mw), Geom3.scale(v, ih), depth, ctx.name(:mullion))&.material = frame_mat
+          end
+          (1...rows).each do |j|
+            y = fw + j * ph + (j - 1) * mw
+            Geom3.box(e, at[fw, y], Geom3.scale(u, iw), Geom3.scale(v, mw), depth, ctx.name(:mullion))&.material = frame_mat
+          end
           cols.times do |i|
             rows.times do |j|
               x = fw + i * (pw + mw)
               y = fw + j * (ph + mw)
-              quad = [at[x, y], at[x + pw, y], at[x + pw, y + ph], at[x, y + ph]].map { |pt| pt.offset(shift) }
-              glass.entities.add_face(quad)
+              if prm[:type] == :casement
+                ctx.need(pw > 2 * sw && ph > 2 * sw, :err_window_small)
+                sash = WallTools.frame_prism(e, rect[x, y, x + pw, y + ph, -fd * 0.1],
+                                             rect[x + sw, y + sw, x + pw - sw, y + ph - sw, -fd * 0.1],
+                                             Geom3.scale(n, -fd * 0.8), ctx.name(:sash))
+                sash.material = frame_mat
+                add_glass.call(rect[x + sw, y + sw, x + pw - sw, y + ph - sw, -fd / 2.0])
+              else
+                add_glass.call(rect[x, y, x + pw, y + ph, -fd / 2.0])
+              end
             end
           end
-          glass.material = WallTools.material(ctx.model, :glass)
         end
+        glass_group&.material = WallTools.material(ctx.model, :glass)
         ctx.made(win)
       end
       ArchiTools.t(:ok_window, n: rects.size)

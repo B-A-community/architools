@@ -71,6 +71,14 @@ module BACommunity
         result
       end
 
+      # Открытая цепочка в однозначном направлении: от конца с меньшим X,
+      # при равенстве — с меньшим Y, затем Z. Порядок, в котором SketchUp
+      # хранит рёбра, тогда не влияет на «слева / справа».
+      def canonical(points)
+        key = ->(p) { [p.x.to_f.round(6), p.y.to_f.round(6), p.z.to_f.round(6)] }
+        (key.call(points.last) <=> key.call(points.first)).negative? ? points.reverse : points
+      end
+
       def polyline_length(points, closed = false)
         pts = closed ? points + [points.first] : points
         pts.each_cons(2).sum { |a, b| a.distance(b).to_f }
@@ -262,16 +270,74 @@ module BACommunity
         g.name = name if name
         mesh = Geom::PolygonMesh.new
         polygons.each do |poly|
-          if planar?(poly)
+          # Совпавшие соседние точки (ось вращения, вырожденный угол) убираем.
+          poly = poly.each_with_object([]) { |pt, acc| acc << pt if acc.empty? || acc.last.distance(pt).to_f > MIN_SIZE }
+          poly.pop while poly.size > 1 && poly.last.distance(poly.first).to_f <= MIN_SIZE
+          next if poly.size < 3
+
+          if planar?(poly) && convex?(poly)
             mesh.add_polygon(poly)
           else
-            # Неплоский многоугольник SketchUp молча выбрасывает — дыра в теле.
-            (1...poly.size - 1).each { |i| mesh.add_polygon(poly[0], poly[i], poly[i + 1]) }
+            # Неплоский многоугольник SketchUp молча выбрасывает — дыра в теле,
+            # а веер из одной вершины у вогнутого вылезает наружу. Режем
+            # честно: отсечение ушей в плоскости многоугольника.
+            triangulate(poly).each { |tri| mesh.add_polygon(tri) }
           end
         end
         flags = smooth ? 12 : 0 # SOFTEN + SMOOTH
         g.entities.fill_from_mesh(mesh, true, flags)
         g
+      end
+
+      def convex?(points)
+        return true if points.size <= 3
+
+        n = newell_normal(points)
+        return false unless n
+
+        points.each_index.all? do |i|
+          a = points[i - 1]
+          b = points[i]
+          c = points[(i + 1) % points.size]
+          (b - a).cross(c - b).dot(n) >= -1.0e-9
+        end
+      end
+
+      # Триангуляция простого многоугольника (возможно, слегка неплоского)
+      # отсечением ушей в проекции на его плоскость Ньюэлла.
+      def triangulate(points)
+        n = newell_normal(points)
+        return [] unless n
+
+        u = (n.parallel?(Z) ? X : Z.cross(n)).normalize
+        v = n.cross(u).normalize
+        p2 = points.map { |pt| [Geom::Vector3d.new(pt.x, pt.y, pt.z).dot(u), Geom::Vector3d.new(pt.x, pt.y, pt.z).dot(v)] }
+        idx = (0...points.size).to_a
+        tris = []
+        cross = ->(a, b, c) { (p2[b][0] - p2[a][0]) * (p2[c][1] - p2[a][1]) - (p2[b][1] - p2[a][1]) * (p2[c][0] - p2[a][0]) }
+        inside = lambda do |q, a, b, c|
+          d1 = (p2[b][0] - p2[a][0]) * (p2[q][1] - p2[a][1]) - (p2[b][1] - p2[a][1]) * (p2[q][0] - p2[a][0])
+          d2 = (p2[c][0] - p2[b][0]) * (p2[q][1] - p2[b][1]) - (p2[c][1] - p2[b][1]) * (p2[q][0] - p2[b][0])
+          d3 = (p2[a][0] - p2[c][0]) * (p2[q][1] - p2[c][1]) - (p2[a][1] - p2[c][1]) * (p2[q][0] - p2[c][0])
+          d1 >= -1.0e-12 && d2 >= -1.0e-12 && d3 >= -1.0e-12
+        end
+        guard = 0
+        while idx.size > 3 && guard < points.size * points.size
+          guard += 1
+          ear = idx.each_index.find do |k|
+            a = idx[k - 1]
+            b = idx[k]
+            c = idx[(k + 1) % idx.size]
+            next false unless cross.call(a, b, c) > 1.0e-12
+
+            idx.none? { |q| ![a, b, c].include?(q) && inside.call(q, a, b, c) }
+          end
+          ear ||= idx.each_index.max_by { |k| cross.call(idx[k - 1], idx[k], idx[(k + 1) % idx.size]) }
+          tris << [points[idx[ear - 1]], points[idx[ear]], points[idx[(ear + 1) % idx.size]]]
+          idx.delete_at(ear)
+        end
+        tris << idx.map { |i| points[i] } if idx.size == 3
+        tris
       end
 
       def planar?(points)

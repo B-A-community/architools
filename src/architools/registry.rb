@@ -7,7 +7,7 @@ module BACommunity
     # меню и тесты зовут тот же Registry.run — путь у всех один.
     module Registry
       Param   = Struct.new(:key, :type, :default, :choices, :min, :max, :show, keyword_init: true)
-      ToolDef = Struct.new(:id, :category, :params, :block, keyword_init: true)
+      ToolDef = Struct.new(:id, :category, :params, :block, :picks, keyword_init: true)
 
       # Построитель списка параметров для define.
       class ParamList
@@ -76,6 +76,18 @@ module BACommunity
           values = Prefs.values(tool)
           overrides.each { |k, v| values[k.to_sym] = v }
           ctx = Context.new(model, values)
+          # Инструменту нужны клики: сначала проверяем выделение, потом
+          # отдаём мышь PickTool, а он вызовет run ещё раз уже с точками.
+          # Тесты передают points: сами — путь тот же, что после кликов.
+          if tool.picks && !values.key?(:points)
+            begin
+              tool.picks[:check]&.call(ctx)
+            rescue UserError => e
+              return { ok: false, message: e.message }
+            end
+            PickTool.start(tool, values) if values.fetch(:place, true)
+            return { ok: true, message: PickTool.prompt(tool, 0), picking: true }
+          end
           model.start_operation(ArchiTools.t(:"tool_#{id}"), true)
           begin
             message = tool.block.call(ctx)
@@ -101,6 +113,15 @@ module BACommunity
       class ToolBody
         def initialize(tool)
           @tool = tool
+        end
+
+        # Клики в модели: count — сколько точек (nil — сколько угодно, конец
+        # по двойному клику или Enter), min — минимум для «сколько угодно»,
+        # prompts — ключи подсказок по порядку, check — проверка выделения
+        # до начала кликов.
+        def picks(count: nil, min: 1, prompts: [], check: nil)
+          @tool.picks = { count: count, min: min, prompts: prompts, check: check }
+          self
         end
 
         def run(&block)
@@ -145,6 +166,16 @@ module BACommunity
 
       def cpoints
         selection.grep(Sketchup::ConstructionPoint)
+      end
+
+      # Точки кликов (Point3d) и что было под курсором: { edge_line:,
+      # face_plane:, face:, edge:, vertex: } — в мировых координатах.
+      def points
+        @p[:points] || []
+      end
+
+      def picked
+        @p[:picked] || []
       end
 
       def need(condition, key, **vars)

@@ -120,8 +120,10 @@
       tool.params.forEach(function (p) {
         var row = document.getElementById('row_' + p.key);
         if (!row || !p.show) return;
+        // Значение '!x' — «любое, кроме x».
         var visible = Object.keys(p.show).every(function (k) {
-          return p.show[k].indexOf(String(state.values[k])) >= 0;
+          var v = String(state.values[k]);
+          return p.show[k].some(function (x) { return x.charAt(0) === '!' ? v !== x.slice(1) : v === x; });
         });
         row.classList.toggle('hidden', !visible);
       });

@@ -173,16 +173,42 @@ module BACommunity
 
       # --- деление -----------------------------------------------------------
 
-      def divide_edge(entities, edge, count, as_points)
+      # Доли длины ребра (0..1) для режима деления. Все режимы оригинала:
+      # на N частей, шаг от начала, шаг от середины, «шаг не больше».
+      def division(len, prm)
+        s = prm[:seg_length]
+        case prm[:by]
+        when :count then (1...prm[:count]).map { |i| i.to_f / prm[:count] }
+        when :max_length
+          raise UserError, ArchiTools.t(:err_distance) if s <= G.tol
+
+          n = (len / s - 1.0e-9).ceil
+          (1...n).map { |i| i.to_f / n }
+        when :from_middle
+          raise UserError, ArchiTools.t(:err_distance) if s <= G.tol
+
+          k = ((len / 2.0) / s).floor
+          (-k..k).map { |i| (len / 2.0 + i * s) / len }.select { |f| f > 1.0e-9 && f < 1 - 1.0e-9 }
+        else # :length — от начала ребра
+          raise UserError, ArchiTools.t(:err_distance) if s <= G.tol
+
+          (1..(len / s).floor).map { |i| i * s / len }.select { |f| f < 1 - 1.0e-9 }
+        end
+      end
+
+      def divide_edge(entities, edge, fractions, output)
         a = edge.start.position
         b = edge.end.position
-        points = (1...count).map { |i| Geom.linear_combination(1.0 - i.to_f / count, a, i.to_f / count, b) }
-        if as_points
-          return points.map { |p| entities.add_cpoint(p) }
+        at = ->(f) { Geom.linear_combination(1.0 - f, a, f, b) }
+        case output
+        when :points then return fractions.map { |f| entities.add_cpoint(at.call(f)) }
+        when :midpoints
+          marks = [0.0] + fractions + [1.0]
+          return marks.each_cons(2).map { |f, g| entities.add_cpoint(at.call((f + g) / 2.0)) }
         end
 
         pieces = [edge]
-        points.each do |p|
+        fractions.map { |f| at.call(f) }.each do |p|
           host = pieces.find { |e| e.valid? && on_segment?(e, p) }
           next unless host
 
@@ -275,25 +301,20 @@ module BACommunity
     end
 
     Registry.define(:divide, :edges) do |p|
-      p.choice :by, :count, %i[count length]
+      p.choice :by, :count, %i[count length from_middle max_length]
       p.int :count, 4, min: 2, max: 1000, show: { by: :count }
-      p.length :seg_length, 1000, show: { by: :length }
-      p.choice :output, :split, %i[split points]
+      p.length :seg_length, 1000, show: { by: %i[length from_middle max_length] }
+      p.choice :output, :split, %i[split points midpoints]
     end.run do |ctx|
       edges = ctx.edges
       ctx.need(!edges.empty?, :need_edges)
       total = 0
       edges.each do |e|
-        n =
-          if ctx.p[:by] == :count then ctx.p[:count]
-          else
-            ctx.need(ctx.p[:seg_length] > Geom3.tol, :err_distance)
-            (e.length.to_f / ctx.p[:seg_length]).round
-          end
-        next if n < 2
-        raise UserError, ArchiTools.t(:err_too_many) if n > 1000
+        fractions = EdgeTools.division(e.length.to_f, ctx.p)
+        next if fractions.empty? && ctx.p[:output] != :midpoints
+        raise UserError, ArchiTools.t(:err_too_many) if fractions.size > 1000
 
-        ctx.made(EdgeTools.divide_edge(ctx.entities, e, n, ctx.p[:output] == :points))
+        ctx.made(EdgeTools.divide_edge(ctx.entities, e, fractions, ctx.p[:output]))
         total += 1
       end
       ArchiTools.t(:ok_divide, n: total)
@@ -344,6 +365,7 @@ module BACommunity
         pts = chain[:points]
         next if pts.size < 2
 
+        pts = Geom3.canonical(pts) unless chain[:closed]
         n = Geom3.chain_normal(pts)
         sign = 1.0
         if chain[:closed]
@@ -367,12 +389,14 @@ module BACommunity
       p.float :gradient, 20, min: 0.01, show: { by: :gradient }
       p.length :height, 500, show: { by: :height }
       p.bool :reverse, false
+      p.bool :keep_original, false
     end.run do |ctx|
       chains = Geom3.chains(ctx.edges).reject { |c| c[:closed] }
       ctx.need(!chains.empty?, :need_open_chain)
       chains.each do |chain|
         verts = chain[:vertices]
-        verts = verts.reverse if verts.last.position.z < verts.first.position.z - Geom3.tol
+        verts = verts.reverse if Geom3.canonical(verts.map(&:position)).first != verts.first.position
+        verts = verts.reverse if verts.last.position.z.to_f < verts.first.position.z.to_f - Geom3.tol
         verts = verts.reverse if ctx.p[:reverse]
         pts = verts.map(&:position)
         plan = pts.each_cons(2).map { |a, b| Math.hypot(b.x - a.x, b.y - a.y) }
@@ -390,8 +414,13 @@ module BACommunity
           s += plan[i - 1] if i.positive?
           Geom::Vector3d.new(0, 0, z0 + s * k - pt.z)
         end
-        Geom3.move_vertices(ctx.entities, verts, vectors)
-        ctx.made(chain[:edges].select(&:valid?))
+        if ctx.p[:keep_original]
+          # Как в оригинале: исходные рёбра остаются, уклон получает копия.
+          ctx.made(ctx.entities.add_curve(pts.zip(vectors).map { |q, vec| q.offset(vec) }))
+        else
+          Geom3.move_vertices(ctx.entities, verts, vectors)
+          ctx.made(chain[:edges].select(&:valid?))
+        end
       end
       ArchiTools.t(:ok_slope, n: chains.size)
     end

@@ -2,8 +2,9 @@
 
 module BACommunity
   module ArchiTools
-    %w[lang constants geom skeleton registry profiles place_tool icons about panel
-       tools/edges tools/modify tools/walls tools/facade tools/railing tools/stairs tools/framing]
+    %w[lang constants geom skeleton terrain registry profiles place_tool pick_tool icons about panel
+       tools/edges tools/points tools/modify tools/surfaces tools/walls tools/facade tools/railing
+       tools/stairs tools/framing tools/site]
       .each { |file| Sketchup.require(File.join(__dir__, file)) }
 
     # Запуск из меню: с последними параметрами, без окна. Отказ — в окне

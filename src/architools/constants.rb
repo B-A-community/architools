@@ -3,7 +3,7 @@
 module BACommunity
   module ArchiTools
     PLUGIN_NAME = 'ArchiTools'
-    VERSION     = '0.2.0'
+    VERSION     = '0.3.0'
 
     # Ключ для Sketchup.read_default / write_default.
     PREFS_KEY = 'BACommunity_ArchiTools'
@@ -16,6 +16,6 @@ module BACommunity
     MAX_ITEMS = 5_000
 
     # Порядок категорий в панели и на панели инструментов.
-    CATEGORIES = %i[edges modify walls facade stairs framing].freeze
+    CATEGORIES = %i[edges modify walls facade stairs framing site].freeze
   end
 end

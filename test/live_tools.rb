@@ -42,7 +42,10 @@ module ATLive
     ents.erase_entities(ents.to_a - [@anchor])
   end
 
+  # ARCHITOOLS_ONLY=regexp — гонять только подходящие проверки (отладка).
   def check(name)
+    return if ENV['ARCHITOOLS_ONLY'] && name !~ Regexp.new(ENV['ARCHITOOLS_ONLY'])
+
     wipe
     ok, info = yield
     @results << [ok ? 'PASS' : 'FAIL', name, info]
@@ -592,12 +595,6 @@ module ATLive
       [r[:ok] && shell&.manifold? && mm(g.bounds.min.x) < -300, "#{r[:message]} manifold=#{shell&.manifold?}"]
     end
 
-    check('roof refuses concave outline') do
-      f = ents.add_face(pt(0, 0), pt(6000, 0), pt(6000, 3000), pt(3000, 3000), pt(3000, 6000), pt(0, 6000))
-      sel(f)
-      r = run(:roof, type: :hip, pitch: 30.0, overhang: 0.0, thickness: 0.0)
-      [!r[:ok] && r[:message] == AT.t(:err_roof_concave) && groups.empty?, r[:message]]
-    end
 
     # --- 0.2: выравнивание ---
     check('align objects: min, center, distribute') do
@@ -617,11 +614,536 @@ module ATLive
       [r1[:ok] && r2[:ok] && r3[:ok] && ys.uniq == [0] && xs == [100, 1600, 3100], "y=#{ys} x=#{xs}"]
     end
 
+
+    # --- 0.3: точки и грани по кликам (точки передаются как после кликов) ---
+    check('divide: from middle, max length, midpoints') do
+      e = ents.add_line(pt(0, 0), pt(1000, 0))
+      sel(e)
+      r1 = run(:divide, by: :from_middle, seg_length: 300.mm.to_f, output: :points)
+      xs1 = ents.grep(Sketchup::ConstructionPoint).map { |c| mm(c.position.x).round }.sort
+      wipe
+      e = ents.add_line(pt(0, 0), pt(1000, 0))
+      sel(e)
+      r2 = run(:divide, by: :max_length, seg_length: 300.mm.to_f, output: :split)
+      lens = ents.grep(Sketchup::Edge).map { |x| mm(x.length).round }.sort
+      wipe
+      e = ents.add_line(pt(0, 0), pt(1000, 0))
+      sel(e)
+      r3 = run(:divide, by: :count, count: 4, output: :midpoints)
+      xs3 = ents.grep(Sketchup::ConstructionPoint).map { |c| mm(c.position.x).round }.sort
+      [r1[:ok] && r2[:ok] && r3[:ok] && xs1 == [200, 500, 800] && lens == [250, 250, 250, 250] &&
+        xs3 == [125, 375, 625, 875], "mid=#{xs1} max=#{lens} midpoints=#{xs3}"]
+    end
+
+    check('point on face: wall light 600 / 1800') do
+      f = vrect(0, 0, 3000, 3000)
+      sel(f)
+      r = run(:point_on_face, dist_h: 600.mm.to_f, dist_v: 1800.mm.to_f,
+                              points: [pt(3000, 0, 0), pt(2000, 0, 0)])
+      c = ents.grep(Sketchup::ConstructionPoint).first
+      p = c && [mm(c.position.x).round, mm(c.position.y).round, mm(c.position.z).round]
+      [r[:ok] && p == [2400, 0, 1800], "#{r[:message]} #{p.inspect}"]
+    end
+
+    check('perpendicular to edge and to face') do
+      e = ents.add_line(pt(0, 0), pt(2000, 0))
+      f = ents.add_face(pt(0, 0, 3000), pt(2000, 0, 3000), pt(2000, 2000, 3000), pt(0, 2000, 3000))
+      model.selection.clear
+      r1 = run(:perpendicular, output: :edge, points: [pt(500, 800), pt(0, 0)],
+                               picked: [{}, { edge_line: [pt(0, 0), Geom::Vector3d.new(1, 0, 0)] }])
+      r2 = run(:perpendicular, output: :edge, points: [pt(700, 700, 1000), pt(0, 0, 3000)],
+                               picked: [{}, { face_plane: [pt(0, 0, 3000), Geom::Vector3d.new(0, 0, 1)] }])
+      lines = ents.grep(Sketchup::Edge).reject { |x| x == e || f.edges.include?(x) }
+      ends = lines.map { |x| x.vertices.map { |v| v.position.to_a.map { |c| mm(c).round } }.sort }
+      [r1[:ok] && r2[:ok] && ends.include?([[500, 0, 0], [500, 800, 0]]) && ends.include?([[700, 700, 1000], [700, 700, 3000]]),
+       "#{r1[:message]} / #{r2[:message]} #{ends.inspect}"]
+    end
+
+    check('face on plane: outline projected onto tilted plane') do
+      model.selection.clear
+      plane = [pt(0, 0, 0), pt(1000, 0, 0), pt(0, 1000, 1000)]
+      outline = [pt(0, 0, 500), pt(1000, 0, -300), pt(1000, 1000, 77), pt(0, 1000, 2000)]
+      r = run(:face_on_plane, points: plane + outline)
+      f = ents.grep(Sketchup::Face).first
+      ok = f && f.vertices.all? { |v| (mm(v.position.z) - mm(v.position.y)).abs < 0.01 }
+      [r[:ok] && ok && f.vertices.size == 4, r[:message]]
+    end
+
+    check('best fit face from non-coplanar points') do
+      model.selection.clear
+      r = run(:best_fit_face, points: [pt(0, 0, 0), pt(2000, 0, 15), pt(2000, 2000, -10), pt(0, 2000, 8)])
+      f = ents.grep(Sketchup::Face).first
+      [r[:ok] && f && f.vertices.size == 4 && (f.area * 645.16 - 4.0e6).abs < 1.0e4, r[:message]]
+    end
+
+    check('move vertex stretches the box') do
+      g = ents.add_face(pt(0, 0), pt(1000, 0), pt(1000, 1000), pt(0, 1000))
+      g.pushpull(-1000.mm)
+      model.selection.clear
+      r = run(:move_vertex, points: [pt(1000, 1000, 1000), pt(1500, 1500, 1500)],
+                            picked: [{ vertex_position: pt(1000, 1000, 1000) }, {}])
+      top = ents.grep(Sketchup::Edge).flat_map(&:vertices).uniq.map { |v| v.position.to_a.map { |c| mm(c).round } }
+      [r[:ok] && top.include?([1500, 1500, 1500]) && !top.include?([1000, 1000, 1000]), r[:message]]
+    end
+
+    check('align by 3 points onto a slope') do
+      g = ents.add_group
+      g.entities.add_face(pt(0, 0), pt(1000, 0), pt(1000, 500), pt(0, 500)).pushpull(-200.mm)
+      sel(g)
+      a = Math::PI / 6
+      t = ->(x, y) { pt(5000 + x * Math.cos(a), y, 1000 + x * Math.sin(a)) }
+      r = run(:align_3pt, scale: false, points: [pt(0, 0), pt(1000, 0), pt(0, 500), t[0, 0], t[1000, 0], t[0, 500]])
+      b = g.bounds
+      zmin = mm(b.min.z)
+      xmin = mm(b.min.x)
+      [r[:ok] && near(xmin, 5000 - 200 * Math.sin(a), 1) && near(zmin, 1000, 1), "x=#{xmin.round} z=#{zmin.round}"]
+    end
+
+    check('extrude keeping taper (frustum)') do
+      base = ents.add_face(pt(0, 0), pt(2000, 0), pt(2000, 2000), pt(0, 2000))
+      base.reverse! if base.normal.z.positive?
+      top = [pt(500, 500, 1000), pt(1500, 500, 1000), pt(1500, 1500, 1000), pt(500, 1500, 1000)]
+      bot = [pt(0, 0), pt(2000, 0), pt(2000, 2000), pt(0, 2000)]
+      4.times { |i| ents.add_face(bot[i], bot[(i + 1) % 4], top[(i + 1) % 4], top[i]) }
+      tf = ents.add_face(top)
+      tf.reverse! if tf.normal.z.negative?
+      sel(tf)
+      r = run(:extrude_taper, distance: 500.mm.to_f)
+      g = ents.add_group(ents.grep(Sketchup::Face) + ents.grep(Sketchup::Edge))
+      zmax = mm(g.bounds.max.z)
+      topf = g.entities.grep(Sketchup::Face).select { |f| f.normal.parallel?(Geom::Vector3d.new(0, 0, 1)) }.max_by { |f| f.bounds.max.z }
+      side = mm(topf.bounds.width)
+      [r[:ok] && g.manifold? && near(zmax, 1500, 0.5) && near(side, 500, 0.5), "#{r[:message]} z=#{zmax.round} top=#{side.round}"]
+    end
+
+    check('revolve: cylinder surface and closed torus') do
+      line = ents.add_line(pt(500, 0, 0), pt(500, 0, 1000))
+      sel(line)
+      r1 = run(:revolve, angle: 360.0, segments: 24, scale: 1.0, rise: 0.0, points: [pt(0, 0, 0), pt(0, 0, 1000)])
+      cyl = groups.first
+      area = cyl.entities.grep(Sketchup::Face).sum(&:area) * 645.16
+      exp = 24 * 2 * 500 * Math.sin(Math::PI / 24) * 1000
+      wipe
+      ring = ents.add_circle(pt(1000, 0, 0), Geom::Vector3d.new(0, 1, 0), 200.mm, 12)
+      sel(ring)
+      r2 = run(:revolve, angle: 360.0, segments: 24, scale: 1.0, rise: 0.0, points: [pt(0, 0, 0), pt(0, 0, 1000)])
+      torus = groups.first
+      [r1[:ok] && r2[:ok] && (area - exp).abs / exp < 0.001 && torus.manifold?, "area=#{area.round} exp=#{exp.round} torus=#{torus.manifold?}"]
+    end
+
+    check('revolve with scale and rise (horn)') do
+      line = ents.add_line(pt(500, 0, 0), pt(600, 0, 0))
+      sel(line)
+      r = run(:revolve, angle: 720.0, segments: 48, scale: 0.2, rise: 2000.mm.to_f, points: [pt(0, 0, 0), pt(0, 0, 1000)])
+      g = groups.first
+      [r[:ok] && near(mm(g.bounds.max.z), 2000, 1) && g.entities.grep(Sketchup::Face).size > 40, r[:message]]
+    end
+
+    check('horizontal slice: 3 cuts on a wall') do
+      f = vrect(0, 0, 3000, 3000)
+      sel(f)
+      r = run(:horizontal_slice, base: 0.0, height: 1000.mm.to_f, count: 2, interval: 1000.mm.to_f)
+      [r[:ok] && ents.grep(Sketchup::Face).size == 3, "#{r[:message]} faces=#{ents.grep(Sketchup::Face).size}"]
+    end
+
+    check('horizontal grooves recess and ribs') do
+      ents.add_line(pt(0, 0), pt(3000, 0)).tap { |e| sel(e) }
+      run(:wall, thickness: 200.mm.to_f, height: 2000.mm.to_f, align: :left)
+      ents.erase_entities(ents.grep(Sketchup::Edge))
+      w = groups.first
+      v0 = mm3(w.volume)
+      w.explode
+      f = ents.grep(Sketchup::Face).find { |x| x.normal.y < -0.99 }
+      sel(f)
+      r = run(:horizontal_grooves, start: 300.mm.to_f, interval: 400.mm.to_f, groove: 20.mm.to_f, depth: 10.mm.to_f)
+      g = ents.add_group(ents.grep(Sketchup::Face) + ents.grep(Sketchup::Edge))
+      dv = v0 - mm3(g.volume)
+      n = 5 # 300, 700, 1100, 1500, 1900 — последняя упирается в верх (1920 < 2000)
+      exp = n * 20 * 10 * 3000.0
+      [r[:ok] && g.manifold? && (dv - exp).abs / exp < 0.001, "#{r[:message]} dv=#{dv.round} exp=#{exp.round}"]
+    end
+
+    check('rectangular array 3×2×2') do
+      g = ents.add_group
+      g.entities.add_face(pt(0, 0), pt(100, 0), pt(100, 100), pt(0, 100))
+      sel(g)
+      r = run(:rectangular_array, cols: 3, rows: 2, levels: 2, dx: 1000.mm.to_f, dy: 500.mm.to_f, dz: 3000.mm.to_f)
+      ps = groups.map { |x| [mm(x.bounds.min.x).round, mm(x.bounds.min.y).round, mm(x.bounds.min.z).round] }.sort
+      [r[:ok] && ps.size == 12 && ps.last == [2000, 500, 3000], "#{r[:message]} last=#{ps.last}"]
+    end
+
+    check('path array: count along L path, turned') do
+      g = ents.add_group
+      g.entities.add_face(pt(-100, -20), pt(100, -20), pt(100, 20), pt(-100, 20))
+      ents.add_curve(pt(0, 0), pt(2000, 0), pt(2000, 2000))
+      sel(g, ents.grep(Sketchup::Edge))
+      r = run(:path_array, mode: :count, count: 5, follow: true)
+      cs = groups.drop(1).map { |x| [mm(x.bounds.center.x).round, mm(x.bounds.center.y).round, mm(x.bounds.width).round] }
+      last = cs.max_by { |x, y, _| y }
+      [r[:ok] && cs.size == 5 && last[0] == 2000 && last[1] == 2000 && last[2] == 40, "#{r[:message]} #{cs.inspect}"]
+    end
+
+    check('path array: max spacing on closed loop') do
+      g = ents.add_group
+      g.entities.add_face(pt(-50, -50), pt(50, -50), pt(50, 50), pt(-50, 50))
+      ents.add_curve(pt(0, 0), pt(3000, 0), pt(3000, 3000), pt(0, 3000), pt(0, 0))
+      sel(g, ents.grep(Sketchup::Edge))
+      r = run(:path_array, mode: :max_spacing, spacing: 1100.mm.to_f, follow: false)
+      [r[:ok] && groups.size == 1 + 11, "#{r[:message]} groups=#{groups.size}"]
+    end
+
+
+    # --- 0.3: окна, стены, колонны, фундаменты ---
+    check('window: casement, sliding, rebated, casing, positions') do
+      res = []
+      { casement: [2, 2], sliding: [2, 2] }.each do |type, (sashes, panes)|
+        wipe
+        sel(vrect(0, 0, 1800, 1500))
+        r = run(:window, type: type, cols: 2, rows: 1, profile: :flat, position: :back, frame_width: 60.mm.to_f,
+                         frame_depth: 70.mm.to_f, mullion: 50.mm.to_f, sash_width: 50.mm.to_f, inset: 0.0, glass: true)
+        w = groups.first
+        s = named(w.entities, :name_sash).size
+        g = named(w.entities, :name_glass).first
+        res << [type, r[:ok] && s == sashes && g && g.entities.grep(Sketchup::Face).size == panes]
+      end
+      { rebated: 2, casing: 2 }.each do |profile, frames|
+        wipe
+        sel(vrect(0, 0, 1800, 1500))
+        r = run(:window, type: :fixed, cols: 1, rows: 1, profile: profile, position: :back, frame_width: 60.mm.to_f,
+                         frame_depth: 70.mm.to_f, mullion: 50.mm.to_f, sash_width: 50.mm.to_f, inset: 0.0, glass: true)
+        w = groups.first
+        n = named(w.entities, :name_frame).size + named(w.entities, :name_casing).size
+        res << [profile, r[:ok] && n == frames]
+      end
+      { back: [0, 70], middle: [-35, 35], front: [-70, 0] }.each do |pos, (y0, y1)|
+        wipe
+        f = vrect(0, 0, 1800, 1500) # грань в плоскости y = 0, нормаль −Y (наружу)
+        f.reverse! if f.normal.y.positive?
+        sel(f)
+        r = run(:window, type: :fixed, cols: 1, rows: 1, profile: :flat, position: pos, frame_width: 60.mm.to_f,
+                         frame_depth: 70.mm.to_f, mullion: 50.mm.to_f, sash_width: 50.mm.to_f, inset: 0.0, glass: false)
+        b = groups.first.bounds
+        res << [pos, r[:ok] && near(mm(b.min.y), y0, 0.5) && near(mm(b.max.y), y1, 0.5)]
+      end
+      [res.all? { |x| x[1] == true }, res.inspect]
+    end
+
+    check('wall kinds: cavity and stud partition') do
+      ents.add_line(pt(0, 0), pt(4000, 0)).tap { |e| sel(e) }
+      r1 = run(:wall, kind: :cavity, height: 3000.mm.to_f, align: :center, leaf: 120.mm.to_f, leaf_inner: 100.mm.to_f,
+                      cavity: 60.mm.to_f, follow_slope: false)
+      w = groups.first
+      layers = w.entities.grep(Sketchup::Group)
+      vol = layers.sum { |l| mm3(l.volume) }
+      ok1 = r1[:ok] && layers.size == 2 && layers.all?(&:manifold?) && (vol - 4000 * 3000 * 220.0).abs < 1.0e5 &&
+            near(mm(w.bounds.height), 280, 0.5)
+      wipe
+      ents.add_line(pt(0, 0), pt(4000, 0)).tap { |e| sel(e) }
+      r2 = run(:wall, kind: :stud, height: 2700.mm.to_f, align: :left, leaf: 12.5.mm.to_f, cavity: 75.mm.to_f,
+                      stud_spacing: 600.mm.to_f, stud_width: 50.mm.to_f, follow_slope: false)
+      w = groups.first
+      studs = named(w.entities, :name_stud).size
+      [ok1 && r2[:ok] && studs == 8, "cavity vol=#{(vol / 1e9).round(3)} studs=#{studs}"]
+    end
+
+    check('wall: own section from face and follow slope') do
+      sec = ents.add_face(pt(-150, -2000), pt(150, -2000), pt(150, -1000), pt(250, -1000), pt(250, -900), pt(-250, -900),
+                          pt(-250, -1000), pt(-150, -1000))
+      line = ents.add_curve(pt(0, 0, 0), pt(3000, 0, 0), pt(6000, 0, 1000))
+      sel(sec, line)
+      r = run(:wall, kind: :solid, thickness: 250.mm.to_f, height: 3000.mm.to_f, align: :center, follow_slope: true)
+      w = groups.find { |g| g.name == AT.t(:name_wall) }
+      top = mm(w.bounds.max.z)
+      # Сечение 300×1000 + полка 500×100; высота сечения 1100.
+      [r[:ok] && w.manifold? && near(top, 2100, 1) && near(mm(w.bounds.height), 500, 1), "top=#{top.round}"]
+    end
+
+    check('columns: all six types') do
+      res = []
+      %i[rect round ellipse capital tuscan tuscan_round].each_with_index do |shape, i|
+        cp = ents.add_cpoint(pt(i * 2000, 0))
+        sel(cp)
+        r = run(:columns, shape: shape, size_x: 400.mm.to_f, size_y: 300.mm.to_f, height: 3000.mm.to_f, footing: false)
+        inst = ents.grep(Sketchup::ComponentInstance).last
+        b = inst.bounds
+        solids = inst.definition.entities.grep(Sketchup::Group)
+        loose_ok = inst.definition.entities.grep(Sketchup::Face).empty? || inst.definition.entities.grep(Sketchup::Face).size > 2
+        res << [shape, r[:ok] && near(mm(b.max.z), 3000, 0.5) && near(mm(b.min.z), 0, 0.5) && loose_ok &&
+                       solids.all?(&:manifold?)]
+      end
+      [res.all? { |x| x[1] == true }, res.inspect]
+    end
+
+    check('pad footing at points, strip footing along L') do
+      cps = [[0, 0], [5000, 0]].map { |x, y| ents.add_cpoint(pt(x, y)) }
+      sel(cps)
+      r1 = run(:pad_footing, pad_x: 1500.mm.to_f, pad_y: 1200.mm.to_f, pad_depth: 400.mm.to_f, stump: 400.mm.to_f,
+                             stump_height: 600.mm.to_f)
+      inst = ents.grep(Sketchup::ComponentInstance)
+      b = inst.first.bounds
+      ok1 = r1[:ok] && inst.size == 2 && near(mm(b.min.z), -1000, 0.5) && near(mm(b.width), 1500, 0.5)
+      wipe
+      ents.add_curve(pt(0, 0), pt(6000, 0), pt(6000, 4000)).tap { |c| sel(c) }
+      r2 = run(:strip_footing, footing_width: 600.mm.to_f, footing_depth: 300.mm.to_f, wall_width: 300.mm.to_f,
+                               wall_height: 600.mm.to_f, align: :center)
+      g = groups.first
+      area = 600 * 300 + 300 * 600
+      exp = area * 10_000.0 # прямой угол «в ус» сохраняет объём по осевой линии
+      v = mm3(g.volume)
+      [ok1 && r2[:ok] && g.manifold? && (v - exp).abs / exp < 0.002, "pad=#{ok1} strip v=#{(v / 1e9).round(3)} exp=#{(exp / 1e9).round(3)}"]
+    end
+
+    check('joists with I-beam profile, rafters with fascia') do
+      f = rect(0, 0, 4000, 3000, 3000)
+      sel(f)
+      r1 = run(:joists, direction: :short, spacing: 600.mm.to_f, width: 100.mm.to_f, depth: 200.mm.to_f,
+                        edge_members: true, side: :below, profile: :i_beam, web: 6.mm.to_f, flange: 8.mm.to_f)
+      g = groups.first
+      bars = g.entities.grep(Sketchup::Group)
+      ok1 = r1[:ok] && bars.size == 8 && bars.all?(&:manifold?) && near(mm(g.bounds.min.z), 2800, 0.5)
+      wipe
+      slope = ents.add_face(pt(0, 0, 3000), pt(6000, 0, 3000), pt(6000, 3000, 4500), pt(0, 3000, 4500))
+      sel(slope)
+      r2 = run(:rafters, spacing: 600.mm.to_f, width: 50.mm.to_f, depth: 200.mm.to_f, edge_members: true,
+                         profile: :rect, fascia: true, fascia_height: 250.mm.to_f, fascia_thickness: 25.mm.to_f)
+      g = groups.first
+      fascia = named(g.entities, :name_fascia).size
+      [ok1 && r2[:ok] && fascia == 1, "joists=#{ok1} fascia=#{fascia}"]
+    end
+
+    check('winder stairs left/right and mono stringer') do
+      res = []
+      %i[left right].each do |turn|
+        wipe
+        model.selection.clear
+        r = run(:winder_stairs, turn: turn, type: :solid, width: 1000.mm.to_f, rise: 2800.mm.to_f, risers: 16,
+                                first_flight: 6, winders: 3, going: 270.mm.to_f, tread_thickness: 40.mm.to_f)
+        g = groups.first
+        b = g.bounds
+        steps = g.entities.grep(Sketchup::Group).size
+        n2 = 16 - 1 - 6 - 3
+        ylen = 1000 + n2 * 270
+        res << [turn, r[:ok] && steps == 15 && near(mm(b.max.z), 15 * 175, 0.5) && near(mm(b.height), ylen, 0.5) &&
+                      near(mm(b.width), 6 * 270 + 1000, 0.5) && (turn == :left ? near(mm(b.min.y), 0, 0.5) : near(mm(b.max.y), 1000, 0.5))]
+      end
+      wipe
+      model.selection.clear
+      r = run(:straight_stairs, type: :mono, width: 1000.mm.to_f, rise: 3000.mm.to_f, risers: 17, going: 280.mm.to_f,
+                                tread_thickness: 40.mm.to_f, nosing: 20.mm.to_f, stringer_width: 120.mm.to_f,
+                                stringer_depth: 250.mm.to_f, railing: false)
+      g = groups.first
+      parts = g.entities.grep(Sketchup::Group)
+      stringer = parts.select { |x| near(mm(x.bounds.height), 120, 0.5) }
+      res << [:mono, r[:ok] && parts.size == 17 && stringer.size == 1]
+      [res.all? { |x| x[1] == true }, res.inspect]
+    end
+
+    # --- 0.3: кровля по любому контуру ---
+    check('roof hip over L-shape and courtyard') do
+      f = ents.add_face(pt(0, 0, 3000), pt(10_000, 0, 3000), pt(10_000, 4000, 3000), pt(4000, 4000, 3000),
+                        pt(4000, 10_000, 3000), pt(0, 10_000, 3000))
+      sel(f)
+      r1 = run(:roof, type: :hip, pitch: 30.0, overhang: 0.0, thickness: 0.0)
+      g = groups.first
+      h1 = mm(g.bounds.max.z) - 3000
+      n1 = g.entities.grep(Sketchup::Face).size
+      wipe
+      outer = ents.add_face(pt(0, 0, 3000), pt(12_000, 0, 3000), pt(12_000, 10_000, 3000), pt(0, 10_000, 3000))
+      hole = ents.add_face(pt(4000, 3000, 3000), pt(8000, 3000, 3000), pt(8000, 7000, 3000), pt(4000, 7000, 3000))
+      hole.erase!
+      outer = ents.grep(Sketchup::Face).first
+      sel(outer)
+      r2 = run(:roof, type: :hip, pitch: 30.0, overhang: 300.mm.to_f, thickness: 150.mm.to_f)
+      g2 = groups.first
+      shell = g2.entities.grep(Sketchup::Group).first
+      exp = 2000 * Math.tan(30 * Math::PI / 180)
+      [r1[:ok] && r2[:ok] && n1 == 6 && near(h1, exp, 1) && shell&.manifold?,
+       "L: faces=#{n1} h=#{h1.round} exp=#{exp.round}; двор: #{r2[:message]} manifold=#{shell&.manifold?}"]
+    end
+
+    check('roof gable refuses non-rectangle') do
+      f = ents.add_face(pt(0, 0), pt(6000, 0), pt(6000, 3000), pt(3000, 3000), pt(3000, 6000), pt(0, 6000))
+      sel(f)
+      r = run(:roof, type: :gable, pitch: 30.0, overhang: 0.0, thickness: 0.0)
+      [!r[:ok] && r[:message] == AT.t(:need_horizontal_rect) && groups.empty?, r[:message]]
+    end
+
+    # --- 0.3: фасад ---
+    check('perforated screen: 27 round holes') do
+      f = vrect(0, 0, 2000, 1000)
+      sel(f)
+      r = run(:perforated_screen, hole_shape: :round, hole_width: 100.mm.to_f, hole_height: 100.mm.to_f,
+                                  spacing_x: 200.mm.to_f, spacing_y: 200.mm.to_f, angle: 0.0, margin: 100.mm.to_f,
+                                  thickness: 20.mm.to_f, erase_source: true)
+      g = groups.first
+      hole = 16 * 0.5 * 50 * 50 * Math.sin(2 * Math::PI / 16)
+      exp = (2000 * 1000 - 27 * hole) * 20
+      v = mm3(g.volume)
+      [r[:ok] && r[:message] == AT.t(:ok_screen, n: 27) && g.manifold? && (v - exp).abs / exp < 0.001,
+       "#{r[:message]} v=#{v.round} exp=#{exp.round}"]
+    end
+
+    check('perforated screen: rotated rect holes in a triangle') do
+      f = ents.add_face(pt(0, 0, 0), pt(3000, 0, 0), pt(1500, 0, 2500))
+      sel(f)
+      r = run(:perforated_screen, hole_shape: :rect, hole_width: 150.mm.to_f, hole_height: 60.mm.to_f,
+                                  spacing_x: 250.mm.to_f, spacing_y: 150.mm.to_f, angle: 30.0, margin: 50.mm.to_f,
+                                  thickness: 10.mm.to_f, erase_source: false)
+      g = groups.first
+      [r[:ok] && g.manifold? && ents.grep(Sketchup::Face).size == 1, r[:message]]
+    end
+
+    check('metal deck: trapezoid, corrugated, box') do
+      res = []
+      %i[trapezoid corrugated box].each do |deck|
+        wipe
+        f = rect(0, 0, 3000, 2000, 3000)
+        sel(f)
+        r = run(:metal_deck, deck: deck, direction: :short, pitch: 200.mm.to_f, rib_height: 40.mm.to_f,
+                             top_ratio: 0.35, thickness: deck == :box ? 1.mm.to_f : 0.0)
+        g = groups.first
+        next res << [deck, false, r[:message]] unless g
+
+        b = g.bounds
+        area = g.entities.grep(Sketchup::Face).sum(&:area) * 645.16
+        res << [deck, r[:ok] && near(mm(b.width), 3000, 1) && near(mm(b.height), 2000, 1) &&
+                      near(mm(b.max.z) - mm(b.min.z), deck == :box ? 41 : 40, 1) && area > 6.0e6 &&
+                      (deck != :box || g.manifold?)]
+      end
+      [res.all? { |x| x[1] == true }, res.inspect]
+    end
+
+    # --- 0.3: рельеф ---
+    terrain = lambda do |&height|
+      g = ents.add_group
+      mesh = Geom::PolygonMesh.new
+      n = 20
+      (0...n).each do |i|
+        (0...n).each do |j|
+          q = [[i, j], [i + 1, j], [i + 1, j + 1], [i, j + 1]].map { |a, b| x = a * 1000; y = b * 1000; pt(x, y, height.call(x, y)) }
+          mesh.add_polygon(q[0], q[1], q[2])
+          mesh.add_polygon(q[0], q[2], q[3])
+        end
+      end
+      g.entities.fill_from_mesh(mesh, true, 0)
+      g
+    end
+
+    check('cut and fill platform on a slope') do
+      t = terrain.call { |x, _y| x * 0.1 }
+      pad = ents.add_face(pt(7000, 7000, 1000), pt(13_000, 7000, 1000), pt(13_000, 13_000, 1000), pt(7000, 13_000, 1000))
+      sel(t, pad)
+      r = run(:cut_fill, level_from: :face, level: 0.0, batter: 45.0, step: 250.mm.to_f, hide_source: true)
+      g = groups.find { |x| x.name == AT.t(:name_graded) }
+      mesh = AT::Terrain.from([g])
+      zc = mm(mesh.height_at(10_000.mm.to_f, 10_000.mm.to_f))
+      ze = mm(mesh.height_at(12_900.mm.to_f, 10_000.mm.to_f))
+      far = mm(mesh.height_at(19_000.mm.to_f, 1000.mm.to_f))
+      cut, fill = r[:message].scan(/(\d+(?:\.\d+))/).flatten.last(2).map(&:to_f)
+      [r[:ok] && t.hidden? && near(zc, 1000, 0.5) && near(ze, 1000, 0.5) && near(far, 1900, 1) &&
+        cut.positive? && fill.positive? && (cut - fill).abs / cut < 0.15, "#{r[:message]} zc=#{zc.round} far=#{far.round}"]
+    end
+
+    check('trace boundary onto terrain') do
+      t = terrain.call { |x, y| 500 + 0.05 * x + 0.02 * y }
+      out = ents.add_face(pt(3000, 3000, 5000), pt(9000, 3000, 5000), pt(9000, 8000, 5000), pt(3000, 8000, 5000))
+      sel(t, out)
+      r = run(:trace_boundary)
+      g = groups.find { |x| x.name == AT.t(:name_boundary) }
+      pts = g.entities.grep(Sketchup::Edge).flat_map(&:vertices).uniq.map(&:position)
+      ok = pts.all? { |q| near(mm(q.z), 500 + 0.05 * mm(q.x) + 0.02 * mm(q.y), 0.5) }
+      [r[:ok] && ok && pts.size >= 4, "#{r[:message]} points=#{pts.size}"]
+    end
+
+    check('contour lines on plane and closed loops on a hill') do
+      terrain.call { |x, _y| x * 0.1 }
+      model.selection.clear
+      r1 = run(:contour_lines, start: 250.mm.to_f, interval: 500.mm.to_f)
+      g = groups.find { |x| x.name == AT.t(:name_contours) }
+      curves = g.entities.grep(Sketchup::Edge).map(&:curve).compact.uniq
+      lens = curves.map { |c| mm(c.edges.sum(&:length)).round }
+      wipe
+      hill = terrain.call { |x, y| 3000 * Math.exp(-(((x - 10_000)**2) + ((y - 10_000)**2)) / 2.0e7) }
+      sel(hill)
+      r2 = run(:contour_lines, start: 0.0, interval: 1000.mm.to_f)
+      g2 = groups.find { |x| x.name == AT.t(:name_contours) }
+      loops = g2.entities.grep(Sketchup::Edge).map(&:curve).compact.uniq
+      closed = loops.all? { |c| c.vertices.first.position.distance(c.vertices.last.position).to_f < 0.01 || c.edges.first.start == c.edges.last.end }
+      [r1[:ok] && r2[:ok] && lens.size == 4 && lens.uniq == [20_000] && loops.size >= 2 && closed,
+       "plane=#{lens} hill=#{r2[:message]} closed=#{closed}"]
+    end
+
+
+    check('pick tool: clicks lead to the same run') do
+      model.selection.clear
+      tool = AT::PickTool.new(AT::Registry[:best_fit_face], AT::Prefs.values(AT::Registry[:best_fit_face]).merge(place: false))
+      tool.instance_variable_set(:@points, [pt(0, 0, 0), pt(1000, 0, 0), pt(1000, 1000, 5), pt(0, 1000, 0)])
+      tool.instance_variable_set(:@picked, [{}, {}, {}, {}])
+      prompt = AT::PickTool.prompt(AT::Registry[:align_3pt], 4)
+      tool.send(:finish)
+      f = ents.grep(Sketchup::Face).first
+      start = run(:align_3pt, place: false)
+      [f && f.vertices.size == 4 && prompt == AT.t(:pk_target2) && !start[:ok], "prompt=#{prompt} start=#{start[:message]}"]
+    end
+
+
+    check('open chain direction is fixed: slope and offset') do
+      ents.add_curve(pt(2000, 500), pt(2000, 0), pt(0, 0))
+      sel(ents.grep(Sketchup::Edge))
+      r1 = run(:slope_edges, by: :gradient, gradient: 10.0, reverse: false)
+      zs = ents.grep(Sketchup::Edge).flat_map(&:vertices).uniq.to_h { |v| [[mm(v.position.x).round, mm(v.position.y).round], mm(v.position.z).round] }
+      wipe
+      e = ents.add_line(pt(1000, 0), pt(0, 0))
+      sel(e)
+      r2 = run(:offset_edges, distance: 100.mm.to_f, both_sides: false, flip: false)
+      ys = ents.grep(Sketchup::Edge).map { |x| mm(x.start.position.y).round }.sort
+      [r1[:ok] && r2[:ok] && zs[[0, 0]] == 0 && zs[[2000, 500]] == 250 && ys == [0, 100], "z=#{zs} y=#{ys}"]
+    end
+
+
+    check('louvres: all seven blade profiles, positions, erase face') do
+      res = []
+      AT::FacadeTools::BLADES.each do |blade|
+        wipe
+        f = vrect(0, 0, 2000, 2000)
+        f.reverse! if f.normal.y.positive?
+        sel(f)
+        r = run(:louvres, direction: :horizontal, blade: blade, blade_depth: 150.mm.to_f, blade_thickness: 30.mm.to_f,
+                          spacing: 250.mm.to_f, angle: 20.0, position: :front, offset: 50.mm.to_f, erase_source: true)
+        g = groups.first
+        n = blade == :sheet ? g.entities.grep(Sketchup::Face).size : g.entities.grep(Sketchup::Group).size
+        solid = %i[sheet].include?(blade) || g.entities.grep(Sketchup::Group).all?(&:manifold?)
+        res << [blade, r[:ok] && n == 8 && solid && ents.grep(Sketchup::Face).empty? && mm(g.bounds.max.y) < -40]
+      end
+      { middle: [-80, 80], back: [49, 260] }.each do |pos, (lo, hi)|
+        wipe
+        f = vrect(0, 0, 2000, 2000)
+        f.reverse! if f.normal.y.positive?
+        sel(f)
+        r = run(:louvres, direction: :vertical, blade: :flat, blade_depth: 150.mm.to_f, blade_thickness: 20.mm.to_f,
+                          spacing: 250.mm.to_f, angle: 0.0, position: pos, offset: 50.mm.to_f, erase_source: false)
+        b = groups.first.bounds
+        res << [pos, r[:ok] && mm(b.min.y) > lo && mm(b.max.y) < hi]
+      end
+      [res.all? { |x| x[1] == true }, res.inspect]
+    end
+
+    check('slope edges: keep original, slope a copy') do
+      ents.add_curve(pt(0, 0), pt(2000, 0), pt(2000, 1000))
+      sel(ents.grep(Sketchup::Edge))
+      r = run(:slope_edges, by: :height, height: 600.mm.to_f, reverse: false, keep_original: true)
+      edges = ents.grep(Sketchup::Edge)
+      flat = edges.count { |e| e.start.position.z.to_f.abs < 1e-6 && e.end.position.z.to_f.abs < 1e-6 }
+      top = edges.flat_map(&:vertices).map { |v| mm(v.position.z).round }.max
+      [r[:ok] && edges.size == 4 && flat == 2 && top == 600, "edges=#{edges.size} flat=#{flat} top=#{top}"]
+    end
+
     # Покрытие считаем по функциональным проверкам — до проверок отказа.
     @functional = @tested.keys
 
     # --- каждый инструмент: отказ на пустом выделении и одна отмена ---
-    no_selection = %i[straight_stairs spiral_stairs landing_stairs escalator columns]
+    no_selection = %i[straight_stairs spiral_stairs landing_stairs escalator winder_stairs columns pad_footing
+                      perpendicular face_on_plane best_fit_face move_vertex contour_lines]
     AT::Registry.all.each do |tool|
       next if no_selection.include?(tool.id)
 
@@ -656,6 +1178,8 @@ module ATLive
     end
 
     wipe
+    return @results if ENV['ARCHITOOLS_ONLY']
+
     missed = AT::Registry.all.map(&:id) - @functional
     @results << [missed.empty? ? 'PASS' : 'FAIL', 'every tool has a live check', missed.empty? ? "#{@functional.size} tools" : "missed: #{missed.join(', ')}"]
     @results

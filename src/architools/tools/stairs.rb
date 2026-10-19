@@ -39,17 +39,19 @@ module BACommunity
         width_vec = Geom::Vector3d.new(0, w, 0)
         xe = (n - 1) * g
 
-        if prm[:type] == :treads
+        if %i[treads mono].include?(prm[:type])
           th = prm[:tread_thickness]
-          sw = prm[:stringers] ? prm[:stringer_width] : 0.0
+          mono = prm[:type] == :mono
+          sw = prm[:stringers] || mono ? prm[:stringer_width] : 0.0
+          inset = mono ? 0.0 : sw
           (n - 1).times do |i|
-            G.box(e, Geom::Point3d.new(i * g - prm[:nosing], sw, (i + 1) * r - th),
-                  Geom::Vector3d.new(g + prm[:nosing], 0, 0), Geom::Vector3d.new(0, w - 2 * sw, 0),
+            G.box(e, Geom::Point3d.new(i * g - prm[:nosing], inset, (i + 1) * r - th),
+                  Geom::Vector3d.new(g + prm[:nosing], 0, 0), Geom::Vector3d.new(0, w - 2 * inset, 0),
                   Geom::Vector3d.new(0, 0, th))
           end
-          if prm[:stringers]
+          if prm[:stringers] || mono
             sdv = prm[:stringer_depth] * Math.sqrt(g * g + r * r) / g
-            [0.0, w - sw].each do |y|
+            (mono ? [(w - sw) / 2.0] : [0.0, w - sw]).each do |y|
               pts = [xz(0, 0), xz(0, r - th), xz(xe, n * r - th)]
               pts = close_under(pts, xe, n * r - th - sdv, slope)
               pts = pts.map { |pt| Geom::Point3d.new(pt.x, y, pt.z) }
@@ -222,6 +224,53 @@ module BACommunity
         stair
       end
 
+      # Г-образная лестница с забежными ступенями в углу вместо площадки.
+      # Ступени — блоки до пола (solid) или плиты толщиной tread_thickness.
+      def winder(entities, prm, name)
+        n = prm[:risers]
+        k = prm[:winders]
+        n1 = prm[:first_flight]
+        n2 = n - 1 - n1 - k
+        raise UserError, ArchiTools.t(:err_flight_short) if n1 < 1 || n2 < 1
+
+        r = prm[:rise] / n
+        g = prm[:going]
+        w = prm[:width]
+        stair = entities.add_group
+        stair.name = name
+        e = stair.entities
+        step = lambda do |pts, idx|
+          top = (idx + 1) * r
+          bottom = prm[:type] == :solid ? 0.0 : top - prm[:tread_thickness]
+          G.prism(e, pts.map { |x, y| Geom::Point3d.new(x, y, bottom) }, Geom::Vector3d.new(0, 0, top - bottom))
+        end
+        n1.times { |i| step.call([[i * g, 0], [(i + 1) * g, 0], [(i + 1) * g, w], [i * g, w]], i) }
+        x0 = n1 * g
+        # Веер из внутреннего угла (x0, w): лучи от направления −Y до +X.
+        corner = lambda do |ang|
+          dx = Math.cos(ang)
+          dy = Math.sin(ang)
+          t = [dx.abs > 1.0e-9 ? w / dx.abs : Float::INFINITY, dy.abs > 1.0e-9 ? w / dy.abs : Float::INFINITY].min
+          [x0 + dx * t, w + dy * t]
+        end
+        k.times do |j|
+          a0 = -Math::PI / 2 + Math::PI / 2 * j / k
+          a1 = -Math::PI / 2 + Math::PI / 2 * (j + 1) / k
+          pts = [[x0, w], corner.call(a0)]
+          pts << [x0 + w, 0.0] if a0 < -Math::PI / 4 - 1.0e-9 && a1 > -Math::PI / 4 + 1.0e-9
+          pts << corner.call(a1)
+          step.call(pts, n1 + j)
+        end
+        n2.times do |i|
+          y = w + i * g
+          step.call([[x0, y], [x0 + w, y], [x0 + w, y + g], [x0, y + g]], n1 + k + i)
+        end
+        if prm[:turn] == :right
+          stair.transform!(Geom::Transformation.translation([0, w, 0]) * Geom::Transformation.scaling(ORIGIN, 1, -1, 1))
+        end
+        stair
+      end
+
       def spiral(entities, prm, name)
         n = prm[:risers]
         r = prm[:rise] / n
@@ -261,17 +310,17 @@ module BACommunity
     end
 
     Registry.define(:straight_stairs, :stairs) do |p|
-      p.choice :type, :slab, %i[slab solid treads]
+      p.choice :type, :slab, %i[slab solid treads mono]
       p.length :width, 1200
       p.length :rise, 3000
       p.int :risers, 17, min: 2, max: 200
       p.length :going, 280
       p.length :waist, 150, show: { type: :slab }
-      p.length :tread_thickness, 40, show: { type: :treads }
-      p.length :nosing, 20, show: { type: :treads }
+      p.length :tread_thickness, 40, show: { type: %i[treads mono] }
+      p.length :nosing, 20, show: { type: %i[treads mono] }
       p.bool :stringers, true, show: { type: :treads }
-      p.length :stringer_width, 50, show: { type: :treads, stringers: true }
-      p.length :stringer_depth, 250, show: { type: :treads, stringers: true }
+      p.length :stringer_width, 50, show: { type: %i[treads mono] }
+      p.length :stringer_depth, 250, show: { type: %i[treads mono] }
       p.bool :railing, false
       Railing.params(p, { railing: true })
     end.run do |ctx|
@@ -346,6 +395,25 @@ module BACommunity
       ctx.made(g)
       ctx.placing = g
       ArchiTools.t(:ok_escalator, run: Sketchup.format_length(StairTools.escalator_run(prm) + 2 * prm[:landing]))
+    end
+
+    Registry.define(:winder_stairs, :stairs) do |p|
+      p.choice :turn, :left, %i[left right]
+      p.choice :type, :solid, %i[solid treads]
+      p.length :width, 1000
+      p.length :rise, 2800
+      p.int :risers, 16, min: 4, max: 200
+      p.int :first_flight, 6, min: 1, max: 198
+      p.int :winders, 3, min: 2, max: 6
+      p.length :going, 270
+      p.length :tread_thickness, 40, show: { type: :treads }
+    end.run do |ctx|
+      prm = ctx.p
+      ctx.need(prm[:width] > Geom3.tol && prm[:rise] > Geom3.tol && prm[:going] > Geom3.tol, :err_distance)
+      g = StairTools.winder(ctx.entities, prm, ctx.name(:winder_stairs))
+      ctx.made(g)
+      ctx.placing = g
+      ArchiTools.t(:ok_winder, riser: Sketchup.format_length(prm[:rise] / prm[:risers]), k: prm[:winders])
     end
 
     Registry.define(:railing, :stairs) do |p|

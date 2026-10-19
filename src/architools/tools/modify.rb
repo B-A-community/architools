@@ -83,6 +83,9 @@ module BACommunity
 
           e.erase!
         end
+        # После слияния часть рёбер остаётся висеть без граней — убираем.
+        stray = entities.grep(Sketchup::Edge).select { |e| e.valid? && e.faces.empty? }
+        entities.erase_entities(stray) unless stray.empty?
       end
 
       # Знаковый объём по граням: отрицательный — нормали смотрят внутрь.
@@ -128,9 +131,16 @@ module BACommunity
 
       # --- профиль по пути --------------------------------------------------
 
-      def path_frames(points)
+      # Оси сечения на каждом участке пути. vertical — сечение стоит
+      # отвесно (b по мировой Z) и на уклоне: стены, пандусы, ленты; иначе
+      # оно перпендикулярно пути: балки, трубы, поручни.
+      def path_frames(points, vertical = false)
         points.each_cons(2).map do |a, b|
           t = (b - a).normalize
+          if vertical && !t.parallel?(G::Z)
+            next { t: t, up: G::Z.clone, side: t.cross(G::Z).normalize }
+          end
+
           up = G::Z - G.scale(t, G::Z.dot(t))
           up = (t.parallel?(G::X) ? Geom::Vector3d.new(0, 1, 0) : G::X) if up.length.to_f < 1.0e-6
           up = up.normalize
@@ -140,9 +150,9 @@ module BACommunity
         end
       end
 
-      def sweep(points, closed, loops2d, cap_polys2d)
+      def sweep(points, closed, loops2d, cap_polys2d, vertical: false)
         pts = closed ? points + [points.first] : points
-        frames = path_frames(pts)
+        frames = path_frames(pts, vertical)
         n = pts.size
         ring_at = lambda do |i, a, b|
           if i.zero? && !closed
@@ -267,14 +277,14 @@ module BACommunity
         i = pts.each_with_index.min_by { |pt, _| pt.distance(center).to_f }.last
         pts = pts.rotate(i)
       end
-      frame0 = ModifyTools.path_frames(pts.first(2)).first
+      frame0 = ModifyTools.path_frames(pts.first(2), true).first
       to2d = lambda do |q|
         d = q - pts.first
         [d.dot(frame0[:side]), d.dot(frame0[:up])]
       end
       loops2d = face.loops.map { |l| l.vertices.map { |v| to2d.call(v.position) } }
       caps2d = ModifyTools.face_polygons(face).map { |poly| poly.map { |q| to2d.call(q) } }
-      polys = ModifyTools.sweep(pts, chain[:closed], loops2d, caps2d)
+      polys = ModifyTools.sweep(pts, chain[:closed], loops2d, caps2d, vertical: true)
       g = Geom3.mesh_group(ctx.entities, polys, ctx.name(:sweep))
       ModifyTools.merge_coplanar(g.entities)
       ModifyTools.soften_smooth(g.entities, 30) if ctx.p[:smooth]
