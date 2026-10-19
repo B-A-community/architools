@@ -56,7 +56,7 @@ module BACommunity
         tool_center_point: 'Точка центра',
         hint_center_point: 'Дуги и окружности — точка в центре; грани — точка в центре тяжести.',
         tool_offset_edges: 'Смещение рёбер',
-        hint_offset_edges: 'Цепочки рёбер (не только контур грани). Замкнутый контур смещается наружу, «в другую сторону» — внутрь. Открытая цепочка считается идущей от конца с меньшим X (затем Y): положительное смещение — влево от этого направления.',
+        hint_offset_edges: 'Цепочки рёбер (не только контур грани). Замкнутый контур смещается наружу, «в другую сторону» — внутрь. Открытая цепочка считается идущей от конца с меньшим X (затем Y): положительное смещение — влево от этого направления. Результат — рёбра или направляющие.',
         tool_slope_edges: 'Уклон рёбер',
         hint_slope_edges: 'Открытая цепочка рёбер — поднять по уклону от нижнего конца (при равных — от конца с меньшим X): угол, 1:N или перепад высоты. «Начать с другого конца» — наоборот.',
         tool_normal_line: 'Перпендикуляр к грани',
@@ -69,8 +69,7 @@ module BACommunity
         tool_shell: 'Оболочка (толщина)',
         hint_shell: 'Грани поверхности — придать толщину: новая группа-тело со смещённой копией и торцами.',
         tool_extrude_path: 'Профиль по пути',
-        hint_extrude_path: 'Одна грань-профиль и цепочка рёбер-путь. В отличие от Ведения профиль не ' \
-                           'закручивается на наклонных участках — остаётся вертикальным.',
+        hint_extrude_path: 'Одна грань-профиль и цепочка рёбер-путь. В отличие от Ведения профиль не закручивается на наклонных участках — остаётся отвесным. Вертикаль профиля — по оси Z, по вектору или по отдельному выделенному ребру (как Upright Extruder).',
         tool_polar_array: 'Круговой массив',
         hint_polar_array: 'Группы или компоненты. Центр — выделенная точка-направляющая, иначе начало координат.',
         tool_linear_array: 'Линейный массив',
@@ -222,8 +221,7 @@ module BACommunity
         hint_profile_sweep: 'Цепочки рёбер — провести по ним сечение из библиотеки: круг, труба, двутавр, ' \
                             'швеллер, уголок, тавр. Поручни, трубы, молдинги, металлокаркас.',
         tool_align_objects: 'Выровнять объекты',
-        hint_align_objects: 'Несколько групп или компонентов — выровнять по краю или центру вдоль оси ' \
-                            'либо распределить равномерно (крайние остаются на месте).',
+        hint_align_objects: 'Несколько групп или компонентов — выровнять по краю или центру вдоль оси (относительно крайнего, самого большого или общего центра выделения — как Center on Red/Green/Blue) либо распределить равномерно (крайние остаются на месте).',
         tool_railing: 'Ограждение по рёбрам',
         hint_railing: 'Цепочка рёбер по низу ограждения (по полу, по носкам ступеней) — стойки, поручень, ' \
                       'балясины, ригели или стекло.',
@@ -293,9 +291,9 @@ module BACommunity
         tool_horizontal_grooves: 'Горизонтальные бороздки',
         hint_horizontal_grooves: 'Грани — горизонтальные бороздки с шагом. Отрицательная глубина даёт выступы (профлист, руст).',
         tool_rectangular_array: 'Прямоугольный массив',
-        hint_rectangular_array: 'Группы или компоненты — сетка копий: столбцы × ряды × этажи.',
+        hint_rectangular_array: 'Группы или компоненты — сетка копий: столбцы × ряды × этажи, обычная или шахматная (нечётные ряды сдвинуты на полшага).',
         tool_path_array: 'Массив по пути',
-        hint_path_array: 'Группы или компоненты и цепочка рёбер-путь — копии вдоль пути с поворотом по направлению (балясины, стулья вокруг стола, деревья).',
+        hint_path_array: 'Группы или компоненты и цепочка рёбер-путь — копии вдоль пути с поворотом по направлению: числом копий, с шагом, «шаг не больше» или «бусы» — равный шаг по прямой между соседними копиями (балясины, стулья вокруг стола, деревья).',
         p_dist_h: 'По направлению',
         p_dist_v: 'Поперёк (вверх)',
         p_scale: 'масштабировать по 1-й паре точек',
@@ -706,7 +704,7 @@ module BACommunity
         tool_center_point: 'Center point',
         hint_center_point: 'Arcs and circles — a point at the center; faces — a point at the centroid.',
         tool_offset_edges: 'Offset edges',
-        hint_offset_edges: 'Edge chains (not just face loops). A closed loop is offset outward, “other side” — inward. An open chain runs from the end with the smaller X (then Y): positive offset is to the left of that direction.',
+        hint_offset_edges: 'Edge chains (not just face loops). A closed loop is offset outward, “other side” — inward. An open chain runs from the end with the smaller X (then Y): positive offset is to the left of that direction. Result — edges or guides.',
         tool_slope_edges: 'Slope edges',
         hint_slope_edges: 'An open edge chain — raise along a slope from its lower end (if level — from the end with the smaller X): angle, 1:N or height difference. “Start from the other end” reverses it.',
         tool_normal_line: 'Face normal',
@@ -719,8 +717,7 @@ module BACommunity
         tool_shell: 'Shell (thicken)',
         hint_shell: 'Surface faces — give them thickness: a new solid group with an offset copy and side faces.',
         tool_extrude_path: 'Profile along path',
-        hint_extrude_path: 'One profile face and one edge chain as the path. Unlike Follow Me the profile does ' \
-                           'not twist on sloped segments — it stays upright.',
+        hint_extrude_path: 'One profile face and one edge chain as the path. Unlike Follow Me the profile does not twist on sloped segments — it stays plumb. The profile vertical is Z, a vector or a separately selected edge (like Upright Extruder).',
         tool_polar_array: 'Polar array',
         hint_polar_array: 'Groups or components. Center — a selected guide point, otherwise the origin.',
         tool_linear_array: 'Linear array',
@@ -864,8 +861,7 @@ module BACommunity
         hint_profile_sweep: 'Edge chains — sweep a library section along them: round, tube, I-beam, channel, ' \
                             'angle, tee. Handrails, pipes, mouldings, steel framing.',
         tool_align_objects: 'Align objects',
-        hint_align_objects: 'Several groups or components — align by edge or center along an axis, ' \
-                            'or distribute evenly (the outermost stay in place).',
+        hint_align_objects: 'Several groups or components — align by edge or center along an axis (relative to the outermost, the largest or the center of the whole selection — like Center on Red/Green/Blue), or distribute evenly (the outermost stay in place).',
         tool_railing: 'Railing along edges',
         hint_railing: 'An edge chain along the bottom of the railing (floor, stair nosings) — posts, handrail, ' \
                       'balusters, rails or glass.',
@@ -935,9 +931,9 @@ module BACommunity
         tool_horizontal_grooves: 'Horizontal grooves',
         hint_horizontal_grooves: 'Faces — horizontal grooves at an interval. Negative depth makes ribs (corrugation, rustication).',
         tool_rectangular_array: 'Rectangular array',
-        hint_rectangular_array: 'Groups or components — a grid of copies: columns × rows × levels.',
+        hint_rectangular_array: 'Groups or components — a grid of copies: columns × rows × levels, regular or staggered (odd rows shifted by half a step).',
         tool_path_array: 'Path array',
-        hint_path_array: 'Groups or components and one edge chain as the path — copies along the path turned to its direction (balusters, chairs around a table, trees).',
+        hint_path_array: 'Groups or components and one edge chain as the path — copies along the path turned to its direction: by count, by spacing, “spacing not over” or a “string” — equal straight distance between neighbours (balusters, chairs around a table, trees).',
         p_dist_h: 'Along direction',
         p_dist_v: 'Across (up)',
         p_scale: 'scale by the 1st point pair',
