@@ -295,6 +295,8 @@ module BACommunity
       p.bool :erase_profile, false
     end.run do |ctx|
       faces = ctx.faces
+      # Выделена группа, а профиль и путь внутри неё — скажем прямо.
+      ctx.need(!(faces.empty? && ctx.edges.empty? && !ctx.objects.empty?), :err_sweep_in_group)
       own_edges = faces.flat_map(&:edges)
       path_edges = ctx.edges - own_edges
       chains = Geom3.chains(path_edges)
@@ -332,8 +334,15 @@ module BACommunity
       near_path = pts.map { |q| q.distance(center).to_f }.min < size
       if near_path
         pts = pts.reverse if !chain[:closed] && center.distance(pts.last).to_f < center.distance(pts.first).to_f
-        # На замкнутом пути начинаем с вершины, ближайшей к профилю.
-        pts = pts.rotate(pts.each_with_index.min_by { |pt, _| pt.distance(center).to_f }.last) if chain[:closed]
+        if chain[:closed]
+          # На замкнутом пути начинаем с вершины, ближайшей к профилю, и
+          # обходим так, чтобы профиль стоял поперёк первого ребра.
+          pts = pts.rotate(pts.each_with_index.min_by { |pt, _| pt.distance(center).to_f }.last)
+          n = face.normal
+          t_out = (pts[1] - pts[0]).normalize
+          t_in = (pts[0] - pts[-1]).normalize
+          pts = [pts[0]] + pts[1..].reverse if n.dot(t_in).abs > n.dot(t_out).abs + 1.0e-9
+        end
       else
         pts = Geom3.canonical(pts) unless chain[:closed]
       end

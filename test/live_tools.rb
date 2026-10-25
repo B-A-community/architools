@@ -1544,6 +1544,41 @@ module ATLive
         near(mm(b.width), 2200, 1) && near(mm(b.height), 1200, 1), "#{r[:message]} #{mm(b.width).round}x#{mm(b.height).round}"]
     end
 
+
+    check('profile along path: closed rectangle face with its edges, profile at the corner') do
+      base = ents.add_face(pt(0, 0, 0), pt(4000, 0, 0), pt(4000, 3000, 0), pt(0, 3000, 0))
+      prof = ents.add_face(pt(0, -50, 0), pt(0, 50, 0), pt(0, 50, 200), pt(0, -50, 200))
+      sel(base, base.edges, prof)
+      r = run(:extrude_path, upright: :z, anchor: :bottom, smooth: true, erase_profile: false)
+      g = groups.first
+      b = g&.bounds
+      # Профиль поперёк ребра вдоль X: кольцо 100 × 200 по контуру 4000 × 3000.
+      ok = r[:ok] && g.manifold? && near(mm(b.max.z), 200, 0.5) && near(mm(b.width), 4100, 1) && near(mm(b.height), 3100, 1) &&
+           near(mm3(g.volume), 100 * 200 * 14_000.0, 1.0e5)
+      [ok, "#{r[:message]} #{b && [mm(b.width).round, mm(b.height).round, mm(b.max.z).round]}"]
+    end
+
+    check('profile along path: group selected — clear hint to open it') do
+      g = ents.add_group
+      g.entities.add_line(pt(0, 0, 0), pt(3000, 0, 0))
+      g.entities.add_face(pt(0, -50, 0), pt(0, 50, 0), pt(0, 50, 200), pt(0, -50, 200))
+      sel(g)
+      r = run(:extrude_path, upright: :z, anchor: :bottom, smooth: true, erase_profile: false)
+      [!r[:ok] && r[:message] == AT.t(:err_sweep_in_group), r[:message]]
+    end
+
+    check('profile along path: flat profile lying on the path is read as a drawing') do
+      ents.add_line(pt(0, 0, 0), pt(3000, 0, 0))
+      prof = ents.add_face(pt(0, -50, 0), pt(200, -50, 0), pt(200, 50, 0), pt(0, 50, 0))
+      sel(ents.grep(Sketchup::Edge).reject { |e| prof.edges.include?(e) }, prof)
+      r = run(:extrude_path, upright: :z, anchor: :bottom, smooth: true, erase_profile: false)
+      g = groups.first
+      b = g&.bounds
+      # Чертёж 200 (X) × 100 (Y, вверх): сечение шириной 200 и высотой 100 у начала пути.
+      [r[:ok] && g.manifold? && near(mm(b.max.z), 100, 0.5) && near(mm(b.height), 200, 0.5),
+       "#{r[:message]} #{b && [mm(b.height).round, mm(b.max.z).round]}"]
+    end
+
     # Покрытие считаем по функциональным проверкам — до проверок отказа.
     @functional = @tested.keys
 

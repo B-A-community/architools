@@ -670,6 +670,7 @@ module BACommunity
         c_extrude_path_center: 'центр — на путь',
         err_sweep_empty: 'Тело не получилось: профиль стоит ребром к пути. Поставьте его поперёк пути в начале или нарисуйте плашмя на земле.',
         ok_sweep_drawn: 'Профиль проведён по пути (профиль взят как чертёж сечения и поставлен в начало пути).',
+        err_sweep_in_group: 'Профиль и путь внутри группы или компонента — откройте её двойным кликом и выделите грань-профиль и путь там.',
         # --- выделение в статусе панели ---
         sel_empty: 'Ничего не выделено',
         sel_edges: 'рёбер', sel_faces: 'граней', sel_objects: 'групп/компонентов', sel_cpoints: 'точек',
@@ -1315,6 +1316,7 @@ module BACommunity
         c_extrude_path_center: 'center on the path',
         err_sweep_empty: 'No solid came out: the profile is edge-on to the path. Place it across the path at its start or draw it flat on the ground.',
         ok_sweep_drawn: 'Profile swept along the path (the profile was taken as a section drawing and placed at the path start).',
+        err_sweep_in_group: 'The profile and path are inside a group or component — open it with a double-click and select the profile face and the path there.',
         sel_empty: 'Nothing selected',
         sel_edges: 'edges', sel_faces: 'faces', sel_objects: 'groups/components', sel_cpoints: 'points',
         sel_other: 'other'
