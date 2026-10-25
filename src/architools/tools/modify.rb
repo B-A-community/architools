@@ -157,22 +157,47 @@ module BACommunity
         pts = closed ? points + [points.first] : points
         frames = path_frames(pts, vertical)
         n = pts.size
-        ring_at = lambda do |i, a, b|
-          if i.zero? && !closed
-            f = frames[0]
-            pts[0].offset(f[:side], a).offset(f[:up], b)
-          elsif i == n - 1 && !closed
-            f = frames[-1]
-            pts[-1].offset(f[:side], a).offset(f[:up], b)
-          else
-            fin = frames[(i - 1) % frames.size]
-            fout = frames[i % frames.size]
-            base = pts[i - 1]
-            start = base.offset(fin[:side], a).offset(fin[:up], b)
-            miter = fin[:t] + fout[:t]
-            miter = fin[:t] if miter.length.to_f < 1.0e-6
-            hit = Geom.intersect_line_plane([start, fin[:t]], [pts[i], miter.normalize])
-            hit || pts[i].offset(fin[:side], a).offset(fin[:up], b)
+        # Отвесный профиль (стены, пандусы, Upright Extruder): «план + высота».
+        # Смещение точки профиля — точный стык «в ус» в плане (перпендикулярно
+        # «вверх»), высота — высота пути в вершине плюс b. Так и излом уклона,
+        # и поворот в плане точны, профиль нигде не заваливается.
+        upv = vertical.is_a?(Geom::Vector3d) ? vertical.normalize : G::Z
+        plan_ok = vertical && pts.each_cons(2).none? { |p0, p1| (p1 - p0).parallel?(upv) }
+        if plan_ok
+          flat = ->(v) { v - G.scale(upv, v.dot(upv)) }
+          sides = pts.each_cons(2).map { |p0, p1| flat.call(p1 - p0).normalize.cross(upv).normalize }
+          height = ->(pt) { Geom::Vector3d.new(pt.x, pt.y, pt.z).dot(upv) }
+          ring_at = lambda do |i, a, b|
+            if !closed && i.zero? then m = sides.first
+            elsif !closed && i == n - 1 then m = sides.last
+            else
+              s_in = sides[(i - 1) % sides.size]
+              s_out = sides[i % sides.size]
+              k = 1.0 + s_in.dot(s_out)
+              # Встречные стороны (разворот на 180°) — без «уса», по исходящей.
+              m = k < 1.0e-6 ? s_out : G.scale(s_in + s_out, 1.0 / k)
+            end
+            base = pts[i]
+            base.offset(G.scale(m, a)).offset(upv, b)
+          end
+        else
+          ring_at = lambda do |i, a, b|
+            if i.zero? && !closed
+              f = frames[0]
+              pts[0].offset(f[:side], a).offset(f[:up], b)
+            elsif i == n - 1 && !closed
+              f = frames[-1]
+              pts[-1].offset(f[:side], a).offset(f[:up], b)
+            else
+              fin = frames[(i - 1) % frames.size]
+              fout = frames[i % frames.size]
+              base = pts[i - 1]
+              start = base.offset(fin[:side], a).offset(fin[:up], b)
+              miter = fin[:t] + fout[:t]
+              miter = fin[:t] if miter.length.to_f < 1.0e-6
+              hit = Geom.intersect_line_plane([start, fin[:t]], [pts[i], miter.normalize])
+              hit || pts[i].offset(fin[:side], a).offset(fin[:up], b)
+            end
           end
         end
         ring_count = closed ? n - 1 : n
@@ -265,15 +290,22 @@ module BACommunity
       p.float :up_x, 0, show: { upright: :vector }
       p.float :up_y, 0, show: { upright: :vector }
       p.float :up_z, 1, show: { upright: :vector }
+      p.choice :anchor, :bottom, %i[bottom center]
       p.bool :smooth, true
       p.bool :erase_profile, false
     end.run do |ctx|
       faces = ctx.faces
-      ctx.need(faces.size == 1, :need_profile_path)
-      face = faces.first
-      profile_edges = face.edges
-      path_edges = ctx.edges - profile_edges
+      own_edges = faces.flat_map(&:edges)
+      path_edges = ctx.edges - own_edges
       chains = Geom3.chains(path_edges)
+      path_face = nil
+      if faces.size == 2 && chains.empty?
+        # Привычка «Ведения»: путь — контур большей грани, профиль — меньшая.
+        path_face, face = faces.max_by(&:area), faces.min_by(&:area)
+      else
+        ctx.need(faces.size == 1, :need_profile_path)
+        face = faces.first
+      end
       up = Geom3::Z.clone
       case ctx.p[:upright]
       when :vector
@@ -288,31 +320,57 @@ module BACommunity
         up = upc[:points][1] - upc[:points][0]
         up = up.reverse if up.z.negative?
       end
-      ctx.need(chains.size == 1 && chains.first[:points].size >= 2, :need_profile_path)
-      chain = chains.first
+      if path_face
+        chain = { points: path_face.outer_loop.vertices.map(&:position), closed: true }
+      else
+        ctx.need(chains.size == 1 && chains.first[:points].size >= 2, :need_profile_path)
+        chain = chains.first
+      end
       pts = chain[:points]
       center = face.bounds.center
-      pts = pts.reverse if !chain[:closed] && center.distance(pts.last).to_f < center.distance(pts.first).to_f
-      if chain[:closed]
+      size = [face.bounds.diagonal.to_f, Geom3::MIN_SIZE].max
+      near_path = pts.map { |q| q.distance(center).to_f }.min < size
+      if near_path
+        pts = pts.reverse if !chain[:closed] && center.distance(pts.last).to_f < center.distance(pts.first).to_f
         # На замкнутом пути начинаем с вершины, ближайшей к профилю.
-        i = pts.each_with_index.min_by { |pt, _| pt.distance(center).to_f }.last
-        pts = pts.rotate(i)
+        pts = pts.rotate(pts.each_with_index.min_by { |pt, _| pt.distance(center).to_f }.last) if chain[:closed]
+      else
+        pts = Geom3.canonical(pts) unless chain[:closed]
       end
       frame0 = ModifyTools.path_frames(pts.first(2), up).first
-      to2d = lambda do |q|
-        d = q - pts.first
-        [d.dot(frame0[:side]), d.dot(frame0[:up])]
-      end
+      # Профиль стоит поперёк пути у его начала — берём как есть. Иначе это
+      # чертёж сечения (как в 1001bit: плашмя на земле, Y — вверх): ставим
+      # его в начало пути низом по центру или центром.
+      placed = near_path && face.normal.dot(frame0[:t]).abs > Math.cos(Geom3.deg(30))
+      to2d =
+        if placed
+          ->(q) { d = q - pts.first; [d.dot(frame0[:side]), d.dot(frame0[:up])] }
+        else
+          n = face.normal
+          pu, pv = n.parallel?(Geom3::Z) ? [Geom3::X, Geom::Vector3d.new(0, 1, 0)] : Geom3.face_frame(face)[1, 2]
+          o = face.vertices.first.position
+          uv = face.outer_loop.vertices.map { |v| Geom3.to_uv(v.position, o, pu, pv) }
+          us = uv.map(&:first)
+          vs = uv.map(&:last)
+          ref_u = (us.min + us.max) / 2.0
+          ref_v = ctx.p[:anchor] == :center ? (vs.min + vs.max) / 2.0 : vs.min
+          ->(q) { a, b = Geom3.to_uv(q, o, pu, pv); [a - ref_u, b - ref_v] }
+        end
       loops2d = face.loops.map { |l| l.vertices.map { |v| to2d.call(v.position) } }
       caps2d = ModifyTools.face_polygons(face).map { |poly| poly.map { |q| to2d.call(q) } }
       polys = ModifyTools.sweep(pts, chain[:closed], loops2d, caps2d, vertical: up)
       g = Geom3.mesh_group(ctx.entities, polys, ctx.name(:sweep))
       ModifyTools.merge_coplanar(g.entities)
+      # Сечение выродилось (профиль ребром к пути) — честный отказ, а не «готово».
+      if !g.valid? || g.entities.grep(Sketchup::Face).size < 3 || g.bounds.diagonal.to_f < Geom3::MIN_SIZE * 10
+        g.erase! if g.valid?
+        raise UserError, ArchiTools.t(:err_sweep_empty)
+      end
       ModifyTools.soften_smooth(g.entities, 30) if ctx.p[:smooth]
       ModifyTools.orient_outward(g.entities)
       face.erase! if ctx.p[:erase_profile] && face.valid?
       ctx.made(g)
-      ArchiTools.t(:ok_sweep)
+      ArchiTools.t(placed ? :ok_sweep : :ok_sweep_drawn)
     end
 
     Registry.define(:polar_array, :modify) do |p|

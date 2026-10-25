@@ -1509,6 +1509,41 @@ module ATLive
        "points=#{n} locked=#{locked.inspect}"]
     end
 
+
+    check('profile along path: profile drawn flat on the ground (1001bit way)') do
+      ents.add_curve(pt(0, 0), pt(3000, 0), pt(5000, 0, 1000))
+      prof = ents.add_face(pt(-2000, -2000), pt(-1900, -2000), pt(-1900, -1700), pt(-2000, -1700))
+      sel(ents.grep(Sketchup::Edge).reject { |e| prof.edges.include?(e) }, prof)
+      r = run(:extrude_path, upright: :z, anchor: :bottom, smooth: true, erase_profile: false)
+      g = groups.first
+      b = g&.bounds
+      ok = r[:ok] && g.manifold? && near(mm(b.min.z), 0, 0.5) && near(mm(b.max.z), 1300, 1) &&
+           near(mm(b.min.y), -50, 0.5) && near(mm(b.max.y), 50, 0.5) && near(mm3(g.volume) / (100 * 300.0), 5000, 15) # отвесное сечение: объём = площадь × длина в плане
+      [ok, "#{r[:message]} z=#{b && [mm(b.min.z).round, mm(b.max.z).round]} y=#{b && [mm(b.min.y).round, mm(b.max.y).round]}"]
+    end
+
+    check('profile along path: anchor center, profile drawn upright away from path') do
+      ents.add_curve(pt(0, 0), pt(3000, 0))
+      prof = ents.add_face(pt(-2000, -3000, 0), pt(-1800, -3000, 0), pt(-1800, -3000, 400), pt(-2000, -3000, 400))
+      sel(ents.grep(Sketchup::Edge).reject { |e| prof.edges.include?(e) }, prof)
+      r = run(:extrude_path, upright: :z, anchor: :center, smooth: true, erase_profile: true)
+      g = groups.first
+      b = g.bounds
+      [r[:ok] && g.manifold? && near(mm(b.min.z), -200, 0.5) && near(mm(b.max.z), 200, 0.5) && !prof.valid?,
+       "z=#{[mm(b.min.z).round, mm(b.max.z).round]}"]
+    end
+
+    check('profile along path: path is a face outline (Follow Me habit)') do
+      top = ents.add_face(pt(0, 0, 500), pt(2000, 0, 500), pt(2000, 1000, 500), pt(0, 1000, 500))
+      prof = ents.add_face(pt(0, 0, 500), pt(0, -100, 500), pt(0, -100, 700), pt(0, 0, 700))
+      sel(top, prof)
+      r = run(:extrude_path, upright: :z, anchor: :bottom, smooth: true, erase_profile: false)
+      g = groups.first
+      b = g.bounds
+      [r[:ok] && g.manifold? && near(mm(b.min.z), 500, 0.5) && near(mm(b.max.z), 700, 0.5) &&
+        near(mm(b.width), 2200, 1) && near(mm(b.height), 1200, 1), "#{r[:message]} #{mm(b.width).round}x#{mm(b.height).round}"]
+    end
+
     # Покрытие считаем по функциональным проверкам — до проверок отказа.
     @functional = @tested.keys
 

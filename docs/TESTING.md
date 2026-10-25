@@ -2,7 +2,7 @@
 
 Протокол живого прогона `python test/bridge.py test/live_tools.rb` в SketchUp 2024 (24.0.484). Пересобирается командой `python test/make_report.py <вывод прогона>`.
 
-Дата: 2026-10-19 · проверок: **183 из 183** · функций 1001bit: **40 из 40** · команд JHS Powerbar: **47 из 47**
+Дата: 2026-10-25 · проверок: **186 из 186** · функций 1001bit: **40 из 40** · команд JHS Powerbar: **47 из 47**
 
 ## 40 функций 1001bit Tools
 
@@ -228,8 +228,8 @@
 | ✅ | jhs rotate about axis and move by vector | c=[-250, 1250] |
 | ✅ | jhs random scale and rotate is reproducible | heights=[173, 282, 443, 300, 231, 354] |
 | ✅ | jhs rotix: arrow keys rotate, axis change, flip | after right=[200, 1000] axis=1 |
-| ✅ | jhs proxify toggle and restore all | proxy=Proxy · ATLive heavy#5 both=["Proxy · ATLive heavy#5", "Proxy · ATLive heavy#5"] back=["ATLive heavy#5", "ATLive heavy#5"] |
-| ✅ | jhs composwapper: one sample replaces many | Заменено экземпляров: 3 → ATLive chair B#5. |
+| ✅ | jhs proxify toggle and restore all | proxy=Proxy · ATLive heavy#2 both=["Proxy · ATLive heavy#2", "Proxy · ATLive heavy#2"] back=["ATLive heavy#2", "ATLive heavy#2"] |
+| ✅ | jhs composwapper: one sample replaces many | Заменено экземпляров: 3 → ATLive chair B#2. |
 | ✅ | jhs mesh maker: cells, rotated guides, divisions | cells=32 guides=13 div=15 |
 | ✅ | jhs split up: 4×4 and 3×3 | n=16 box=96 manifold=true |
 | ✅ | jhs FFD: lattice moves the shape, lock keeps edges, finish bakes | moved=true low=0 n=1 |
@@ -238,6 +238,9 @@
 | ✅ | jhs offset as guides, chord string, bounds align, staggered grid | guides=2 chords=[500] xs=[1600] row2=[500, 1500, 2500] |
 | ✅ | jhs pick tool: mirror finishes by Enter after 2 points | x=[-900, -500] |
 | ✅ | jhs ffd custom lattice, lock and unlock by the tool | points=12 locked=true |
+| ✅ | profile along path: profile drawn flat on the ground (1001bit way) | Профиль проведён по пути (профиль взят как чертёж сечения и поставлен в начало пути). z=[0, 1300] y=[-50, 50] |
+| ✅ | profile along path: anchor center, profile drawn upright away from path | z=[-200, 200] |
+| ✅ | profile along path: path is a face outline (Follow Me habit) | Профиль проведён по пути. 2200x1200 |
 | ✅ | empty selection refused: fillet | Выделите два ребра (или цепочку рёбер). |
 | ✅ | empty selection refused: chamfer | Выделите два ребра (или цепочку рёбер). |
 | ✅ | empty selection refused: extend_edges | Выделите два ребра — или рёбра и одну грань. |
@@ -251,7 +254,7 @@
 | ✅ | empty selection refused: extrude_faces | Выделите грани. |
 | ✅ | empty selection refused: shift_faces | Выделите грани. |
 | ✅ | empty selection refused: shell | Выделите грани. |
-| ✅ | empty selection refused: extrude_path | Выделите одну грань-профиль и одну цепочку рёбер-путь. |
+| ✅ | empty selection refused: extrude_path | Выделите грань-профиль и путь: цепочку рёбер или вторую, большую грань. |
 | ✅ | empty selection refused: polar_array | Выделите группы или компоненты. |
 | ✅ | empty selection refused: linear_array | Выделите группы или компоненты. |
 | ✅ | empty selection refused: align_objects | Выделите хотя бы две группы или компонента. |
